@@ -11,11 +11,19 @@ export class GroupListItemDto {
   @ApiProperty({ description: "The contract's identifier for this group" })
   on_chain_id: string;
 
-  @ApiProperty({ description: 'Stellar account address of the group creator' })
-  creator: string;
+  @ApiProperty({
+    description:
+      'Stellar account address of the group creator, or null if this group has only been observed via a group_split_settled event so far',
+    nullable: true,
+  })
+  creator: string | null;
 
-  @ApiProperty({ description: 'Group name' })
-  name: string;
+  @ApiProperty({
+    description:
+      'Group name, or null if this group has only been observed via a group_split_settled event so far',
+    nullable: true,
+  })
+  name: string | null;
 
   @ApiProperty({
     description: 'Stellar account addresses of current group members',

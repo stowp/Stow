@@ -12,14 +12,18 @@ import { BalanceService } from './balance.service';
 import { GroupsService } from './groups.service';
 import { BalanceController } from './balance.controller';
 import { WebhooksModule } from '../webhooks/webhooks.module';
+import { SavingsController } from './savings.controller';
+import { SavingsService } from './savings.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([AnchorDeposit, Balance, Group]),
     CacheModule.register({ ttl: 10_000 }),
+    GoalsModule,
+    WebhooksModule,
   ],
-  controllers: [AnchorController, BalanceController],
-  providers: [AnchorService, BalanceService, GroupsService],
-  exports: [AnchorService, BalanceService, GroupsService],
+  controllers: [AnchorController, BalanceController, SavingsController],
+  providers: [AnchorService, BalanceService, GroupsService, SavingsService],
+  exports: [AnchorService, BalanceService, GroupsService, SavingsService],
 })
 export class SavingsModule {}
