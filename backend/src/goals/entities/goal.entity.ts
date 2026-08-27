@@ -10,6 +10,7 @@ import {
 export enum GoalStatus {
   ACTIVE = 'active',
   REACHED = 'reached',
+  CLAIMED = 'claimed',
 }
 
 /**
