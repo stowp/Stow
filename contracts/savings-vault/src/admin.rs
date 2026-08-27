@@ -1,9 +1,9 @@
 //! Initialization and admin configuration.
 
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, BytesN, Env};
 
 use crate::error::Error;
-use crate::events::{EVENT_SCHEMA_VERSION, TOPIC_ADMIN_SET, TOPIC_INIT};
+use crate::events::{EVENT_SCHEMA_VERSION, TOPIC_ADMIN_SET, TOPIC_INIT, TOPIC_UPGRADED};
 use crate::storage::{self, extend_instance_ttl};
 use crate::types::DataKey;
 
@@ -123,6 +123,77 @@ pub fn set_deposit_cap(env: &Env, cap: i128) -> Result<(), Error> {
     }
 
     env.storage().instance().set(&DataKey::DepositCap, &cap);
+
+    Ok(())
+}
+
+/// The minimum deposit amount, in token stroops. `0` means no minimum.
+///
+/// Defaults to `0` (no minimum) before `set_min_deposit` has ever been
+/// called.
+pub fn min_deposit(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::MinDeposit).unwrap_or(0)
+}
+
+/// Set the minimum deposit amount. Admin-only. `0` disables the minimum.
+///
+/// - Requires `require_auth` from the current admin.
+/// - Errors `InvalidAmount` if `min < 0`.
+/// - Takes effect immediately: the very next `deposit` call is checked
+///   against the new value.
+pub fn set_min_deposit(env: &Env, min: i128) -> Result<(), Error> {
+    extend_instance_ttl(env);
+
+    let admin = storage::get_admin(env).ok_or(Error::NotInitialized)?;
+    admin.require_auth();
+
+    if min < 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    env.storage().instance().set(&DataKey::MinDeposit, &min);
+
+    Ok(())
+}
+
+/// Upgrade the contract's executable to `new_wasm_hash`. Admin-only.
+///
+/// - Requires `require_auth` from the current admin.
+/// - `new_wasm_hash` must already be uploaded to the ledger (e.g. via the
+///   Stellar CLI or `Deployer::upload_contract_wasm`); this call swaps the
+///   currently-installed code for that Wasm. The swap does not take effect
+///   until *after* this invocation finishes.
+/// - Storage is not migrated as part of the swap — the new Wasm must remain
+///   compatible with existing persisted `DataKey` records, or migrate them
+///   itself on next write.
+/// - Emits an `upgraded` event.
+///
+/// ## Trust trade-off
+///
+/// This makes the admin key a single point of total control: whoever holds
+/// it can replace the contract's logic outright, including the rules that
+/// govern custodied funds — there is no on-chain check that the new Wasm
+/// preserves any invariant the old one had. This is deliberate for now (it
+/// lets bugs be patched post-deploy without migrating to a new contract
+/// address), but it means depositors are trusting the admin key's
+/// operational security as much as the code itself. Hardening this trust
+/// assumption (a timelock, a multisig admin, or both) is tracked as
+/// follow-up work, not part of this issue.
+pub fn upgrade(env: &Env, caller: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+    extend_instance_ttl(env);
+
+    let current_admin = admin(env)?;
+    caller.require_auth();
+    if caller != current_admin {
+        return Err(Error::Unauthorized);
+    }
+
+    env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+    env.events().publish(
+        (TOPIC_UPGRADED,),
+        (caller, new_wasm_hash, env.ledger().timestamp()),
+    );
 
     Ok(())
 }

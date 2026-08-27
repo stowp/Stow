@@ -16,7 +16,7 @@ describe('NotificationsService', () => {
   const mockNotification: Partial<Notification> = {
     id: 1,
     user_address: userAddress,
-    type: NotificationType.EventCreated,
+    type: NotificationType.GoalReached,
     title: 'Test',
     message: 'Test message',
     read: false,
@@ -55,7 +55,7 @@ describe('NotificationsService', () => {
 
       await service.create(
         userAddress,
-        NotificationType.EventCreated,
+        NotificationType.GoalReached,
         'Test',
         'Test message',
       );
@@ -74,7 +74,7 @@ describe('NotificationsService', () => {
 
       await service.create(
         userAddress,
-        NotificationType.EventCreated,
+        NotificationType.GoalReached,
         'Test',
         'Test message',
       );
@@ -88,7 +88,7 @@ describe('NotificationsService', () => {
 
       await service.create(
         userAddress,
-        NotificationType.EventCreated,
+        NotificationType.GoalReached,
         'Test',
         'Test message',
       );
@@ -96,5 +96,25 @@ describe('NotificationsService', () => {
       await received;
       expect(notificationsRepository.save).toHaveBeenCalled();
     });
+  });
+
+  describe('create', () => {
+    it.each(Object.values(NotificationType))(
+      'creates a notification of savings type %s',
+      async (type) => {
+        const notification = await service.create(
+          userAddress,
+          type,
+          'Test',
+          'Test message',
+        );
+
+        expect(notification).toEqual(mockNotification);
+        expect(notificationsRepository.create).toHaveBeenCalledWith(
+          expect.objectContaining({ user_address: userAddress, type }),
+        );
+        expect(notificationsRepository.save).toHaveBeenCalled();
+      },
+    );
   });
 });

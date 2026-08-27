@@ -8,15 +8,10 @@ import {
 } from 'typeorm';
 
 export enum NotificationType {
-  EventCreated = 'event_created',
-  MatchAdded = 'match_added',
-  PredictionSubmitted = 'prediction_submitted',
-  MatchResolved = 'match_resolved',
-  WinnerVerified = 'winner_verified',
-  EventCancelled = 'event_cancelled',
-  DisputeSlaApproaching = 'dispute_sla_approaching',
-  DisputeSlaBreached = 'dispute_sla_breached',
   GoalReached = 'goal_reached',
+  LockUnlocked = 'lock_unlocked',
+  GroupSettled = 'group_settled',
+  Deposit = 'deposit',
 }
 
 @Entity('notifications')

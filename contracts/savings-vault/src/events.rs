@@ -27,6 +27,8 @@ pub const EVENT_SCHEMA_VERSION: u32 = 1;
 pub const TOPIC_INIT: &str = "init";
 /// Emitted at the end of a successful `set_admin` call.
 pub const TOPIC_ADMIN_SET: &str = "admin_set";
+/// Emitted at the end of a successful `upgrade` call.
+pub const TOPIC_UPGRADED: &str = "upgraded";
 
 // --- flexible ------------------------------------------------------------
 /// Emitted at the end of a successful `deposit` call.

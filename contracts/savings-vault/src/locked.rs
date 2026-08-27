@@ -89,6 +89,15 @@ pub fn top_up(env: &Env, owner: Address, plan_id: u64, amount: i128) -> Result<(
 /// `InsufficientBalance` if over-withdrawing (checked before the time
 /// guard so callers get the most actionable error), `StillLocked` before
 /// unlock.
+///
+/// ## Payout destination
+///
+/// As with `flexible::withdraw`, there is no separate "recipient"
+/// parameter: `owner` must both authenticate (`require_auth`) and match the
+/// plan's stored owner, and `token_client.transfer` always pays that same
+/// address. Funds cannot be redirected to a third-party address — the API
+/// gives the caller no way to name one. No exception to this exists for
+/// locked (solo) plans.
 pub fn withdraw(env: &Env, owner: Address, plan_id: u64, amount: i128) -> Result<(), Error> {
     extend_instance_ttl(env);
     owner.require_auth();

@@ -90,6 +90,12 @@ pub enum DataKey {
     /// Durability: instance — a single scalar read on every `deposit`. TTL:
     /// bumped alongside the rest of instance storage.
     DepositCap,
+    /// Admin-configured minimum deposit amount, in token stroops. Absent
+    /// (or `0`) means no minimum. See [`crate::admin::min_deposit`].
+    ///
+    /// Durability: instance — a single scalar read on every `deposit`. TTL:
+    /// bumped alongside the rest of instance storage.
+    MinDeposit,
     /// Monotonic counters for plan/goal/group ids.
     ///
     /// Durability: instance — small, hot counters incremented on every

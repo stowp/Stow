@@ -22,7 +22,7 @@ frontend) can build against it without reading the stub bodies.
 
 | Module | Entrypoints | Suggested issues |
 | --- | --- | --- |
-| `admin` | `initialize`, `token`, `set_admin` | init guard, token config, admin rotation |
+| `admin` | `initialize`, `token`, `set_admin`, `set_deposit_cap`, `set_min_deposit`, `upgrade` | init guard, token config, admin rotation, deposit cap, minimum deposit, contract upgrade |
 | `storage` | TTL + accessors | storage helpers, TTL tuning, id allocation |
 | `flexible` | `deposit`, `withdraw`, `get_account` | one issue each |
 | `locked` | `create`, `top_up`, `withdraw`, `plan` | create + time-lock enforcement, top-up, withdraw |
@@ -181,6 +181,50 @@ stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
 ```bash
 stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
   -- set_deposit_cap --cap 1000000000
+```
+
+#### `min_deposit() -> i128`
+- **Auth:** none (read-only).
+- **Returns:** the current minimum deposit amount, in token stroops. `0`
+  means no minimum (the default before `set_min_deposit` is ever called).
+- **Errors:** none.
+```bash
+stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
+  -- min_deposit
+```
+
+#### `set_min_deposit(min: i128) -> Result<(), Error>`
+- **Auth:** current admin.
+- **Errors:** `NotInitialized`, `InvalidAmount` if `min < 0`.
+- Takes effect immediately — the next `deposit` call is checked against the
+  new value. Guards against dust deposits that waste storage.
+```bash
+stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
+  -- set_min_deposit --min 10000000
+```
+
+#### `upgrade(caller: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error>`
+- **Auth:** current admin.
+- **Errors:** `NotInitialized`, `Unauthorized` if the caller is not the
+  current admin.
+- `new_wasm_hash` must already be uploaded to the ledger (e.g. via
+  `stellar contract upload` or `Deployer::upload_contract_wasm`); this swaps
+  the contract's currently-installed code for that Wasm. The swap takes
+  effect after this invocation finishes; storage is **not** migrated —
+  the new Wasm must stay compatible with existing persisted `DataKey`
+  records or migrate them itself on next write.
+- **Trust trade-off:** this gives the admin key total, unchecked control
+  over the contract's logic, including the rules governing custodied
+  funds — there is no on-chain check that a new Wasm preserves any
+  invariant the old one had. It is deliberate for now (it lets bugs be
+  patched post-deploy without a new contract address), but it means
+  depositors trust the admin key's operational security as much as the
+  code itself. A timelock and/or a multisig admin are tracked as follow-up
+  hardening, not part of this issue.
+- **Events:** [`upgraded`](#upgraded).
+```bash
+stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
+  -- upgrade --caller GADMIN...ADDRESS --new_wasm_hash <64-char-hex-hash>
 ```
 
 ### Flexible savings — deposit / withdraw any time
@@ -450,6 +494,15 @@ Topics: `(Symbol("admin_set"),)`
 | --- | --- | --- |
 | `previous_admin` | `Address` | Admin before rotation. |
 | `new_admin` | `Address` | Admin after rotation. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `upgraded`
+Topics: `(Symbol("upgraded"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `caller` | `Address` | Admin who triggered the upgrade. |
+| `new_wasm_hash` | `BytesN<32>` | Hash of the newly-installed Wasm. |
 | `timestamp` | `u64` | Ledger timestamp of the call. |
 
 #### `deposit`

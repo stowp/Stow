@@ -17,7 +17,7 @@ describe('NotificationsController', () => {
   const mockNotification: Partial<Notification> = {
     id: 1,
     user_address: 'GBRPYHIL2CI3WHZDTOOQFC6EB4RRJC3XNRBF7XN',
-    type: NotificationType.EventCreated,
+    type: NotificationType.GoalReached,
     title: 'Test',
     message: 'Test message',
     read: false,

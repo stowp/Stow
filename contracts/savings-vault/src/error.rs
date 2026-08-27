@@ -52,4 +52,8 @@ pub enum Error {
     // --- lifecycle (admin) ---
     /// The contract is paused; mutating entrypoints are rejected.
     Paused = 15,
+
+    // --- policy limits ---
+    /// The deposit amount was below the admin-configured minimum deposit.
+    DepositBelowMinimum = 16,
 }

@@ -18,17 +18,25 @@ use crate::types::{DataKey, FlexibleAccount};
 /// - Rejects the deposit with `DepositCapExceeded` if an admin-configured
 ///   per-account cap is set (non-zero) and the resulting balance would
 ///   exceed it.
+/// - Rejects the deposit with `DepositBelowMinimum` if an admin-configured
+///   minimum deposit is set (non-zero) and `amount` is below it — guards
+///   against dust deposits that waste storage.
 /// - Emits a `deposit` event.
 ///
 /// Errors: `InvalidAmount` if `amount <= 0`, `NotInitialized` if the vault
-/// has not been initialized, `DepositCapExceeded`, `Overflow` if the
-/// resulting balance would not fit in `i128`.
+/// has not been initialized, `DepositBelowMinimum`, `DepositCapExceeded`,
+/// `Overflow` if the resulting balance would not fit in `i128`.
 pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
     extend_instance_ttl(env);
     from.require_auth();
 
     if amount <= 0 {
         return Err(Error::InvalidAmount);
+    }
+
+    let min = admin::min_deposit(env);
+    if min > 0 && amount < min {
+        return Err(Error::DepositBelowMinimum);
     }
 
     let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
@@ -69,6 +77,15 @@ pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
 /// - Errors `InsufficientBalance` if `amount > balance`.
 /// - Transfers tokens out and decrements balance.
 /// - Emits a `withdraw` event.
+///
+/// ## Payout destination
+///
+/// There is no separate "recipient" parameter: `owner` is simultaneously
+/// the address that must authenticate (`require_auth`) and the only address
+/// `token_client.transfer` ever pays. A caller cannot redirect funds to a
+/// third-party address because the API gives them no way to name one — the
+/// only account this call can ever credit is the one it authenticates as.
+/// No exception to this exists for flexible (solo) accounts.
 pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
     extend_instance_ttl(env);
     owner.require_auth();

@@ -27,7 +27,7 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, Address, Env, Map, String};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map, String};
 
 use crate::error::Error;
 use crate::types::{FlexibleAccount, Goal, Group, LockedPlan};
@@ -72,6 +72,22 @@ impl SavingsVault {
     /// Set the per-account deposit cap. Admin-only; `0` disables the cap.
     pub fn set_deposit_cap(env: Env, cap: i128) -> Result<(), Error> {
         admin::set_deposit_cap(&env, cap)
+    }
+
+    /// The minimum deposit amount, in token stroops. `0` means no minimum.
+    pub fn min_deposit(env: Env) -> i128 {
+        admin::min_deposit(&env)
+    }
+
+    /// Set the minimum deposit amount. Admin-only; `0` disables the minimum.
+    pub fn set_min_deposit(env: Env, min: i128) -> Result<(), Error> {
+        admin::set_min_deposit(&env, min)
+    }
+
+    /// Upgrade the contract's Wasm executable to `new_wasm_hash`. Admin-only.
+    /// See `admin::upgrade` for the trust trade-off this implies.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        admin::upgrade(&env, caller, new_wasm_hash)
     }
 
     // --- flexible ----------------------------------------------------------
