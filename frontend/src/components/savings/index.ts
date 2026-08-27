@@ -10,3 +10,5 @@ export type {
   SavingsListRowSkeletonProps,
   SavingsListSkeletonProps,
 } from './SavingsListRowSkeleton';
+export { default as GoalCard } from './GoalCard';
+export type { GoalCardGoal, GoalCardProps } from './GoalCard';

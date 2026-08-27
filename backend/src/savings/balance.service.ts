@@ -10,6 +10,13 @@ export interface BalanceView {
   amount: string;
 }
 
+export interface AccountBalanceView {
+  account: string;
+  amount: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
 /** TTL for balance reads: 10 seconds */
 const BALANCE_CACHE_TTL_MS = 10_000;
 
@@ -48,5 +55,26 @@ export class BalanceService {
     const view: BalanceView = { account, amount: balance?.amount ?? '0' };
     await this.cache.set(key, view, BALANCE_CACHE_TTL_MS);
     return view;
+  }
+
+  /**
+   * Fetches the projected flexible balance for `account`, or `null` if no
+   * account has ever been observed (i.e. no `deposit` event has ever been
+   * recorded for it) — distinct from `get()`, which defaults an unknown
+   * account to a zero balance for internal callers that don't need to
+   * distinguish "zero balance" from "never existed".
+   */
+  async findAccount(account: string): Promise<AccountBalanceView | null> {
+    const balance = await this.balanceRepository.findOne({
+      where: { account },
+    });
+    if (!balance) return null;
+
+    return {
+      account: balance.account,
+      amount: balance.amount,
+      created_at: balance.created_at,
+      updated_at: balance.updated_at,
+    };
   }
 }

@@ -2,6 +2,7 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
 
@@ -21,6 +22,9 @@ export class Balance {
   /** Stroop amount, kept as a string to avoid JS number precision loss. */
   @Column({ type: 'varchar', default: '0' })
   amount: string;
+
+  @CreateDateColumn()
+  created_at: Date;
 
   @UpdateDateColumn()
   updated_at: Date;
