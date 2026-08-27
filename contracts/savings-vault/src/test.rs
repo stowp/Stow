@@ -215,6 +215,27 @@ fn goal_claim_after_reached_returns_funds() {
     assert_eq!(result, Err(Ok(Error::NotFound)));
 }
 
+/// An unreached goal cannot be claimed and remains intact.
+#[test]
+fn goal_claim_before_reached_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+    const TARGET: i128 = 100_000_000;
+    const SAVED: i128 = 40_000_000;
+
+    mint(&env, &token, &token_admin, &owner, SAVED);
+    let goal_id = client.goal_create(&owner, &String::from_str(&env, "holiday"), &TARGET);
+    client.goal_contribute(&owner, &goal_id, &SAVED);
+
+    let result = client.try_goal_claim(&owner, &goal_id);
+    assert_eq!(result, Err(Ok(Error::GoalNotReached)));
+    assert_eq!(client.goal(&goal_id).saved_amount, SAVED);
+}
+
 /// Closing a group, assigning shares, and settling pays each member their
 /// bps-weighted portion of the pooled contributions and fully drains the
 /// group balance. Shares (34%/33%/33%) don't divide the pool evenly, so this
@@ -307,7 +328,6 @@ fn group_split_settles_by_shares() {
 /// Flexible over-withdrawal: depositing 100 then requesting 101 must return
 /// `Error::InsufficientBalance` and leave the on-chain balance unchanged.
 #[test]
-#[ignore = "TODO(issue #40): implement flexible::withdraw balance check"]
 fn flexible_withdraw_over_balance_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -348,7 +368,6 @@ fn flexible_withdraw_over_balance_rejected() {
 /// This is the complement of the rejection test: withdrawing exactly the
 /// deposited amount must NOT return `InsufficientBalance`.
 #[test]
-#[ignore = "TODO(issue #40): implement flexible::withdraw balance check"]
 fn flexible_withdraw_exact_balance_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
@@ -883,7 +902,6 @@ fn group_contribute_by_non_member_rejected() {
 /// This is the admin-lifecycle equivalent of an auth check: only the first
 /// caller (during deployment) should be able to set the admin and token.
 #[test]
-#[ignore = "TODO(issue #39): implement admin::initialize double-init guard"]
 fn initialize_twice_rejected() {
     let env = Env::default();
     env.mock_all_auths();

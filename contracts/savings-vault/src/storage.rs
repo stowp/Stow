@@ -68,6 +68,7 @@ pub fn get_token(env: &Env) -> Option<Address> {
 
 /// Persist `DataKey::Token`.
 pub fn set_token(env: &Env, token: &Address) {
+    extend_instance_ttl(env);
     env.storage().instance().set(&DataKey::Token, token);
 }
 

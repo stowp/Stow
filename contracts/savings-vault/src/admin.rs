@@ -15,11 +15,11 @@ use crate::types::DataKey;
 ///
 /// Acceptance: after init, `token()` and `admin()` return the given values.
 pub fn initialize(env: &Env, admin: Address, token: Address) -> Result<(), Error> {
-    extend_instance_ttl(env);
-
     if env.storage().instance().has(&DataKey::Admin) {
         return Err(Error::AlreadyInitialized);
     }
+
+    extend_instance_ttl(env);
 
     env.storage().instance().set(&DataKey::Admin, &admin);
     storage::set_token(env, &token);
