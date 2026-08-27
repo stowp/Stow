@@ -93,4 +93,44 @@ describe('BalanceService – caching', () => {
       expect(cache.del).toHaveBeenCalledWith(CACHE_KEY);
     });
   });
+
+  describe('findAccount', () => {
+    it('returns the balance and timestamps for a known account', async () => {
+      const created_at = new Date('2026-01-01');
+      const updated_at = new Date('2026-02-01');
+      repo.findOne.mockResolvedValue({
+        account: ACCOUNT,
+        amount: '5000000',
+        created_at,
+        updated_at,
+      });
+
+      const result = await service.findAccount(ACCOUNT);
+
+      expect(repo.findOne).toHaveBeenCalledWith({ where: { account: ACCOUNT } });
+      expect(result).toEqual({
+        account: ACCOUNT,
+        amount: '5000000',
+        created_at,
+        updated_at,
+      });
+    });
+
+    it('returns null for an account that has never been observed', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      const result = await service.findAccount('GUNKNOWN');
+
+      expect(result).toBeNull();
+    });
+
+    it('does not use the cache (unlike get())', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await service.findAccount(ACCOUNT);
+
+      expect(cache.get).not.toHaveBeenCalled();
+      expect(cache.set).not.toHaveBeenCalled();
+    });
+  });
 });

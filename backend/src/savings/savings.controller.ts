@@ -1,7 +1,8 @@
-import { Controller, Get, Query } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
+import { ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Public } from '../common/decorators/public.decorator';
 import { GoalsService } from '../goals/goals.service';
+import { BalanceService } from './balance.service';
 import { LockedPlansService } from './locked-plans.service';
 import { ListGoalsDto } from './dto/list-goals.dto';
 import { ListLockedDto } from './dto/list-locked.dto';
@@ -14,6 +15,7 @@ export class SavingsController {
     private readonly savingsService: SavingsService,
     private readonly goalsService: GoalsService,
     private readonly lockedPlansService: LockedPlansService,
+    private readonly balanceService: BalanceService,
   ) {}
 
   /**
@@ -89,5 +91,26 @@ export class SavingsController {
         Number(limit),
       );
     return { address, plans: data, total, page: p, limit: l };
+  }
+
+  /**
+   * GET /savings/accounts/:address
+   *
+   * Returns the projected flexible balance for a Stellar account, along
+   * with when it was first observed and last updated. 404s if no account
+   * has ever been observed for this address (distinct from a zero balance).
+   */
+  @Get('accounts/:address')
+  @Public()
+  @ApiOperation({ summary: "Get an address's flexible savings balance" })
+  @ApiParam({ name: 'address', description: 'Stellar account address' })
+  @ApiResponse({ status: 200, description: 'Balance and timestamps for the account' })
+  @ApiResponse({ status: 404, description: 'No account exists for this address' })
+  async getAccount(@Param('address') address: string) {
+    const account = await this.balanceService.findAccount(address);
+    if (!account) {
+      throw new NotFoundException(`No savings account found for address: ${address}`);
+    }
+    return account;
   }
 }
