@@ -1,17 +1,16 @@
 # Database Seeding
 
-This directory contains scripts for seeding and resetting the development database with realistic test data.
+This directory contains scripts for seeding and resetting the development database with realistic test data for Stow savings.
 
 ## Overview
 
-The seeding system provides:
+The seeding system provides demo data for the Stow savings platform:
 
-- **10 sample events** (5 active, 3 completed, 2 cancelled)
-- **50 matches** across events with realistic team names and timestamps
-- **200 predictions** from various users with different outcomes
-- **30 participants** across events with prediction statistics
-- **5 winners** for completed events with rankings
-- **10 verified addresses** for testing verification features
+- **3 sample users** with Stellar addresses
+- **3 savings accounts** with varying balances
+- **2 goals** (1 active, 1 reached)
+- **1 group** pool with 3 members
+- **3 group members** representing shares in the group pool
 
 ## Usage
 
@@ -26,8 +25,9 @@ npm run seed
 This will:
 
 1. Connect to the database
-2. Insert all sample data
-3. Display a summary of inserted records
+2. Check that the environment is not production
+3. Insert all sample data
+4. Display a summary of inserted records
 
 ### Reset Database
 
@@ -51,135 +51,61 @@ npm run seed
 
 ## Data Structure
 
-### Events
+### Users
 
-| Field       | Type      | Description                     |
-| ----------- | --------- | ------------------------------- |
-| id          | string    | Unique event identifier         |
-| title       | string    | Event name                      |
-| description | string    | Event details                   |
-| status      | enum      | active, completed, or cancelled |
-| created_at  | timestamp | Creation date                   |
+| Field           | Type   | Description            |
+| --------------- | ------ | ---------------------- |
+| id              | uuid   | Unique user identifier |
+| stellar_address | string | Stellar wallet address |
+| username        | string | Display name           |
+| role            | string | User role ('user')     |
+| email           | string | Email address          |
 
-**Sample Events:**
+### Savings Accounts
 
-- Premier League Week 1 (active)
-- Champions League Round 16 (active)
-- NBA Finals 2026 (active)
-- Wimbledon 2026 (completed)
-- World Cup Qualifiers (completed)
-- Formula 1 Season (cancelled)
-- UFC Fight Night (active)
-- Cricket World Cup (active)
+| Field   | Type   | Description                    |
+| ------- | ------ | ------------------------------ |
+| id      | uuid   | Unique account ID              |
+| owner   | string | User's Stellar wallet address  |
+| balance | string | Flexible balance in stroops    |
 
-### Matches
+### Goals
 
-| Field      | Type   | Description                   |
-| ---------- | ------ | ----------------------------- |
-| id         | string | Unique match identifier       |
-| event_id   | string | Parent event ID               |
-| home_team  | string | Home team/player name         |
-| away_team  | string | Away team/player name         |
-| match_time | number | Unix timestamp                |
-| status     | enum   | pending or completed          |
-| result     | string | Outcome (home, away, or null) |
+| Field          | Type   | Description                           |
+| -------------- | ------ | ------------------------------------- |
+| id             | uuid   | Unique goal ID                        |
+| on_chain_id    | string | Contract's identifier for this goal   |
+| owner          | string | User's Stellar wallet address         |
+| name           | string | Name of the goal                      |
+| target_amount  | string | Target amount in stroops              |
+| current_amount | string | Current saved amount in stroops       |
+| status         | enum   | 'active' or 'reached'                 |
+| reached_at     | date   | Timestamp when the goal was reached   |
 
-**Distribution:**
+### Groups
 
-- Event 001: 10 matches (5 completed, 5 pending)
-- Event 002: 10 matches (3 completed, 7 pending)
-- Event 003: 10 matches (all pending)
-- Event 004: 10 matches (all completed)
-- Event 005: 10 matches (all completed)
+| Field       | Type    | Description                           |
+| ----------- | ------- | ------------------------------------- |
+| id          | uuid    | Unique group ID                       |
+| on_chain_id | string  | Contract's identifier for this group  |
+| creator     | string  | Creator's Stellar wallet address      |
+| name        | string  | Name of the group                     |
+| balance     | string  | Total pooled balance in stroops       |
+| open        | boolean | Whether the group is open for members |
+| settled     | boolean | Whether the group has been settled    |
 
-### Predictions
+### Group Members
 
-| Field             | Type      | Description                          |
-| ----------------- | --------- | ------------------------------------ |
-| id                | string    | Unique prediction ID                 |
-| user_address      | string    | Stellar wallet address               |
-| match_id          | string    | Predicted match                      |
-| predicted_outcome | string    | User's prediction (home, away, draw) |
-| stake             | number    | Prediction stake amount              |
-| created_at        | timestamp | Prediction timestamp                 |
-
-**Distribution:**
-
-- 200 total predictions
-- Distributed across 30 users
-- Random outcomes (home, away, draw)
-- Random stake amounts (100-1100)
-
-### Participants
-
-| Field               | Type      | Description               |
-| ------------------- | --------- | ------------------------- |
-| id                  | string    | Unique participant ID     |
-| address             | string    | Stellar wallet address    |
-| event_id            | string    | Event ID                  |
-| joined_at           | timestamp | Join timestamp            |
-| total_predictions   | number    | Total predictions made    |
-| correct_predictions | number    | Correct predictions count |
-
-**Distribution:**
-
-- 30 participants across events
-- 5-50 predictions per participant
-- 1-25 correct predictions per participant
-
-### Winners
-
-| Field    | Type   | Description             |
-| -------- | ------ | ----------------------- |
-| id       | string | Unique winner ID        |
-| address  | string | Winner's wallet address |
-| event_id | string | Event ID                |
-| rank     | number | Ranking (1, 2, 3...)    |
-| score    | number | Final score             |
-
-**Sample Winners:**
-
-- Event 004 (Wimbledon): 2 winners
-- Event 005 (World Cup): 3 winners
-
-### Verified Addresses
-
-| Field       | Type      | Description            |
-| ----------- | --------- | ---------------------- |
-| address     | string    | Stellar wallet address |
-| verified_at | timestamp | Verification timestamp |
-
-**Distribution:**
-
-- 10 verified addresses
-- Random verification dates within last 60 days
-
-## Testing with Seeded Data
-
-After seeding, you can test endpoints:
-
-```bash
-# Get event by ID
-curl http://localhost:3000/api/v1/creator-events/event-001
-
-# Get event by invite code
-curl http://localhost:3000/api/v1/creator-events/invite/ABC123
-
-# Get event matches
-curl http://localhost:3000/api/v1/creator-events/event-001/matches
-
-# Get user score
-curl http://localhost:3000/api/v1/creator-events/event-001/score/GUSER001
-
-# Get participants
-curl http://localhost:3000/api/v1/creator-events/event-001/participants
-```
+| Field     | Type    | Description                                  |
+| --------- | ------- | -------------------------------------------- |
+| id        | uuid    | Unique member ID                             |
+| group_id  | uuid    | Parent group ID                              |
+| address   | string  | Member's Stellar wallet address              |
+| share_bps | integer | Basis-point share for group-split (0-10000)  |
 
 ## Notes
 
-- Seed data uses realistic team names and timestamps
-- All relationships are maintained (foreign keys)
-- Data is idempotent (safe to run multiple times)
-- Timestamps are distributed across the last 60 days
-- Predictions are randomly distributed across matches
-- Accuracy percentages are calculated from correct/total predictions
+- Seed data is idempotent and uses fixed UUIDs to avoid duplicates (safe to run multiple times)
+- Timestamps and relations are correctly mapped
+- Balances and amounts are stored as strings to avoid JS number precision loss on large i128 values (represented in stroops)
+- The script checks for `NODE_ENV === 'production'` to prevent execution in production environments

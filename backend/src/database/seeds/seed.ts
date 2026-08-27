@@ -5,8 +5,13 @@ config();
 
 /**
  * Database seeding script for development and testing
- * Populates sample events, matches, predictions, and participants
+ * Populates savings demo data (users, accounts, a goal, a group)
  */
+
+if (process.env.NODE_ENV === 'production') {
+  console.error('❌ Cannot run seed in production environment!');
+  process.exit(1);
+}
 
 const dataSource = new DataSource({
   type: 'postgres',
@@ -24,284 +29,170 @@ async function seed() {
 
     const queryRunner = dataSource.createQueryRunner();
 
-    // Sample events data
-    const events = [
+    // 1. Users
+    const users = [
       {
-        id: 'event-001',
-        title: 'Premier League Week 1',
-        description: 'Predictions for Premier League matches in week 1',
-        status: 'active',
-        created_at: new Date('2026-05-01'),
+        id: '11111111-1111-4111-a111-111111111111',
+        stellar_address: 'GUSER111111111111111111111111111111111111111111111111111',
+        username: 'alice_saver',
+        role: 'user',
+        email: 'alice@example.com',
       },
       {
-        id: 'event-002',
-        title: 'Champions League Round 16',
-        description: 'European football championship matches',
-        status: 'active',
-        created_at: new Date('2026-05-05'),
+        id: '22222222-2222-4222-a222-222222222222',
+        stellar_address: 'GUSER222222222222222222222222222222222222222222222222222',
+        username: 'bob_saver',
+        role: 'user',
+        email: 'bob@example.com',
       },
       {
-        id: 'event-003',
-        title: 'NBA Finals 2026',
-        description: 'Basketball championship predictions',
-        status: 'active',
-        created_at: new Date('2026-05-10'),
-      },
-      {
-        id: 'event-004',
-        title: 'Wimbledon 2026',
-        description: 'Tennis tournament predictions',
-        status: 'completed',
-        created_at: new Date('2026-04-01'),
-      },
-      {
-        id: 'event-005',
-        title: 'World Cup Qualifiers',
-        description: 'International football qualifiers',
-        status: 'completed',
-        created_at: new Date('2026-03-01'),
-      },
-      {
-        id: 'event-006',
-        title: 'Formula 1 Season',
-        description: 'F1 race predictions',
-        status: 'cancelled',
-        created_at: new Date('2026-02-01'),
-      },
-      {
-        id: 'event-007',
-        title: 'UFC Fight Night',
-        description: 'MMA fight predictions',
-        status: 'active',
-        created_at: new Date('2026-05-15'),
-      },
-      {
-        id: 'event-008',
-        title: 'Cricket World Cup',
-        description: 'International cricket tournament',
-        status: 'active',
-        created_at: new Date('2026-05-20'),
-      },
+        id: '33333333-3333-4333-a333-333333333333',
+        stellar_address: 'GUSER333333333333333333333333333333333333333333333333333',
+        username: 'charlie_saver',
+        role: 'user',
+        email: 'charlie@example.com',
+      }
     ];
 
-    // Sample matches data (50 matches across events)
-    const matches = [
-      // Event 001 - 10 matches
-      ...Array.from({ length: 10 }, (_, i) => ({
-        id: `match-001-${i + 1}`,
-        event_id: 'event-001',
-        home_team: `Team ${String.fromCharCode(65 + (i % 5))}`,
-        away_team: `Team ${String.fromCharCode(70 + (i % 5))}`,
-        match_time: new Date('2026-05-08').getTime() + i * 86400000,
-        status: i < 5 ? 'completed' : 'pending',
-        result: i < 5 ? (i % 2 === 0 ? 'home' : 'away') : null,
-      })),
-      // Event 002 - 10 matches
-      ...Array.from({ length: 10 }, (_, i) => ({
-        id: `match-002-${i + 1}`,
-        event_id: 'event-002',
-        home_team: `Club ${String.fromCharCode(65 + (i % 5))}`,
-        away_team: `Club ${String.fromCharCode(70 + (i % 5))}`,
-        match_time: new Date('2026-05-12').getTime() + i * 86400000,
-        status: i < 3 ? 'completed' : 'pending',
-        result: i < 3 ? (i % 2 === 0 ? 'home' : 'away') : null,
-      })),
-      // Event 003 - 10 matches
-      ...Array.from({ length: 10 }, (_, i) => ({
-        id: `match-003-${i + 1}`,
-        event_id: 'event-003',
-        home_team: `Team ${String.fromCharCode(65 + (i % 5))}`,
-        away_team: `Team ${String.fromCharCode(70 + (i % 5))}`,
-        match_time: new Date('2026-05-18').getTime() + i * 86400000,
-        status: 'pending',
-        result: null,
-      })),
-      // Event 004 - 10 matches (completed)
-      ...Array.from({ length: 10 }, (_, i) => ({
-        id: `match-004-${i + 1}`,
-        event_id: 'event-004',
-        home_team: `Player ${String.fromCharCode(65 + (i % 5))}`,
-        away_team: `Player ${String.fromCharCode(70 + (i % 5))}`,
-        match_time: new Date('2026-04-15').getTime() + i * 86400000,
-        status: 'completed',
-        result: i % 2 === 0 ? 'home' : 'away',
-      })),
-      // Event 005 - 10 matches (completed)
-      ...Array.from({ length: 10 }, (_, i) => ({
-        id: `match-005-${i + 1}`,
-        event_id: 'event-005',
-        home_team: `Country ${String.fromCharCode(65 + (i % 5))}`,
-        away_team: `Country ${String.fromCharCode(70 + (i % 5))}`,
-        match_time: new Date('2026-03-15').getTime() + i * 86400000,
-        status: 'completed',
-        result: i % 2 === 0 ? 'home' : 'away',
-      })),
+    // 2. Savings Accounts
+    const savingsAccounts = [
+      {
+        id: '11111111-1111-4111-b111-111111111111',
+        owner: users[0].stellar_address,
+        balance: '5000000000', // 500 XLM
+      },
+      {
+        id: '22222222-2222-4222-b222-222222222222',
+        owner: users[1].stellar_address,
+        balance: '1500000000', // 150 XLM
+      },
+      {
+        id: '33333333-3333-4333-b333-333333333333',
+        owner: users[2].stellar_address,
+        balance: '0',
+      }
     ];
 
-    // Sample predictions (200 predictions from various users)
-    const predictions = Array.from({ length: 200 }, (_, i) => ({
-      id: `prediction-${i + 1}`,
-      user_address: `GUSER${String(i % 30).padStart(3, '0')}`,
-      match_id: matches[i % matches.length].id,
-      predicted_outcome: ['home', 'away', 'draw'][i % 3],
-      stake: (Math.random() * 1000 + 100).toFixed(0),
-      created_at: new Date(Date.now() - Math.random() * 30 * 86400000),
-    }));
-
-    // Sample participants (30 participants across events)
-    const participants = Array.from({ length: 30 }, (_, i) => ({
-      id: `participant-${i + 1}`,
-      address: `GUSER${String(i).padStart(3, '0')}`,
-      event_id: events[i % events.length].id,
-      joined_at: new Date(Date.now() - Math.random() * 30 * 86400000),
-      total_predictions: Math.floor(Math.random() * 50) + 5,
-      correct_predictions: Math.floor(Math.random() * 25) + 1,
-    }));
-
-    // Sample winners (5 winners for completed events)
-    const winners = [
+    // 3. Goals
+    const goals = [
       {
-        id: 'winner-001',
-        address: 'GUSER001',
-        event_id: 'event-004',
-        rank: 1,
-        score: 95,
+        id: '11111111-1111-4111-c111-111111111111',
+        on_chain_id: 'goal_001',
+        owner: users[0].stellar_address,
+        name: 'New Car Fund',
+        target_amount: '100000000000', // 10,000 XLM
+        current_amount: '25000000000', // 2,500 XLM
+        status: 'active',
+        reached_at: null,
       },
       {
-        id: 'winner-002',
-        address: 'GUSER002',
-        event_id: 'event-004',
-        rank: 2,
-        score: 88,
-      },
-      {
-        id: 'winner-003',
-        address: 'GUSER003',
-        event_id: 'event-005',
-        rank: 1,
-        score: 92,
-      },
-      {
-        id: 'winner-004',
-        address: 'GUSER004',
-        event_id: 'event-005',
-        rank: 2,
-        score: 85,
-      },
-      {
-        id: 'winner-005',
-        address: 'GUSER005',
-        event_id: 'event-005',
-        rank: 3,
-        score: 78,
-      },
+        id: '22222222-2222-4222-c222-222222222222',
+        on_chain_id: 'goal_002',
+        owner: users[1].stellar_address,
+        name: 'Emergency Savings',
+        target_amount: '50000000000', // 5,000 XLM
+        current_amount: '50000000000', // 5,000 XLM
+        status: 'reached',
+        reached_at: new Date(),
+      }
     ];
 
-    // Sample verified addresses (10 verified)
-    const verifiedAddresses = Array.from({ length: 10 }, (_, i) => ({
-      address: `GVERIFIED${String(i).padStart(3, '0')}`,
-      verified_at: new Date(Date.now() - Math.random() * 60 * 86400000),
-    }));
+    // 4. Groups
+    const group_id = '11111111-1111-4111-d111-111111111111';
+    const groups = [
+      {
+        id: group_id,
+        on_chain_id: 'group_001',
+        creator: users[0].stellar_address,
+        name: 'Family Vacation',
+        balance: '12000000000', // 1,200 XLM
+        open: true,
+        settled: false,
+      }
+    ];
 
-    console.log('Seeding data...');
+    // 5. Group Members
+    const groupMembers = [
+      {
+        id: '11111111-1111-4111-e111-111111111111',
+        group_id: group_id,
+        address: users[0].stellar_address,
+        share_bps: 4000,
+      },
+      {
+        id: '22222222-2222-4222-e222-222222222222',
+        group_id: group_id,
+        address: users[1].stellar_address,
+        share_bps: 3000,
+      },
+      {
+        id: '33333333-3333-4333-e333-333333333333',
+        group_id: group_id,
+        address: users[2].stellar_address,
+        share_bps: 3000,
+      }
+    ];
 
-    // Insert events
-    for (const event of events) {
+    console.log('Seeding savings demo data...');
+
+    // Insert Users
+    for (const user of users) {
       await queryRunner.query(
-        `INSERT INTO events (id, title, description, status, created_at) 
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-        [
-          event.id,
-          event.title,
-          event.description,
-          event.status,
-          event.created_at,
-        ],
+        `INSERT INTO users (id, stellar_address, username, role, email) 
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
+        [user.id, user.stellar_address, user.username, user.role, user.email],
       );
     }
-    console.log(`✓ Inserted ${events.length} events`);
+    console.log(`✓ Inserted ${users.length} users`);
 
-    // Insert matches
-    for (const match of matches) {
+    // Insert Savings Accounts
+    for (const account of savingsAccounts) {
       await queryRunner.query(
-        `INSERT INTO matches (id, event_id, home_team, away_team, match_time, status, result) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
-        [
-          match.id,
-          match.event_id,
-          match.home_team,
-          match.away_team,
-          match.match_time,
-          match.status,
-          match.result,
-        ],
+        `INSERT INTO savings_accounts (id, owner, balance) 
+         VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
+        [account.id, account.owner, account.balance],
       );
     }
-    console.log(`✓ Inserted ${matches.length} matches`);
+    console.log(`✓ Inserted ${savingsAccounts.length} savings accounts`);
 
-    // Insert predictions
-    for (const prediction of predictions) {
+    // Insert Goals
+    for (const goal of goals) {
       await queryRunner.query(
-        `INSERT INTO predictions (id, user_address, match_id, predicted_outcome, stake, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
-        [
-          prediction.id,
-          prediction.user_address,
-          prediction.match_id,
-          prediction.predicted_outcome,
-          prediction.stake,
-          prediction.created_at,
-        ],
+        `INSERT INTO goals (id, on_chain_id, owner, name, target_amount, current_amount, status, reached_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (id) DO NOTHING`,
+        [goal.id, goal.on_chain_id, goal.owner, goal.name, goal.target_amount, goal.current_amount, goal.status, goal.reached_at],
       );
     }
-    console.log(`✓ Inserted ${predictions.length} predictions`);
+    console.log(`✓ Inserted ${goals.length} goals`);
 
-    // Insert participants
-    for (const participant of participants) {
+    // Insert Groups
+    for (const group of groups) {
       await queryRunner.query(
-        `INSERT INTO event_participants (id, address, event_id, joined_at, total_predictions, correct_predictions) 
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
-        [
-          participant.id,
-          participant.address,
-          participant.event_id,
-          participant.joined_at,
-          participant.total_predictions,
-          participant.correct_predictions,
-        ],
+        `INSERT INTO groups (id, on_chain_id, creator, name, balance, open, settled) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
+        [group.id, group.on_chain_id, group.creator, group.name, group.balance, group.open, group.settled],
       );
     }
-    console.log(`✓ Inserted ${participants.length} participants`);
+    console.log(`✓ Inserted ${groups.length} groups`);
 
-    // Insert winners
-    for (const winner of winners) {
+    // Insert Group Members
+    for (const member of groupMembers) {
       await queryRunner.query(
-        `INSERT INTO event_winners (id, address, event_id, rank, score) 
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-        [winner.id, winner.address, winner.event_id, winner.rank, winner.score],
+        `INSERT INTO group_members (id, group_id, address, share_bps) 
+         VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING`,
+        [member.id, member.group_id, member.address, member.share_bps],
       );
     }
-    console.log(`✓ Inserted ${winners.length} winners`);
-
-    // Insert verified addresses
-    for (const verified of verifiedAddresses) {
-      await queryRunner.query(
-        `INSERT INTO verified_addresses (address, verified_at) 
-         VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-        [verified.address, verified.verified_at],
-      );
-    }
-    console.log(`✓ Inserted ${verifiedAddresses.length} verified addresses`);
+    console.log(`✓ Inserted ${groupMembers.length} group members`);
 
     console.log('\n✅ Seeding completed successfully!');
     console.log(`
 Summary:
-- Events: ${events.length}
-- Matches: ${matches.length}
-- Predictions: ${predictions.length}
-- Participants: ${participants.length}
-- Winners: ${winners.length}
-- Verified Addresses: ${verifiedAddresses.length}
+- Users: ${users.length}
+- Savings Accounts: ${savingsAccounts.length}
+- Goals: ${goals.length}
+- Groups: ${groups.length}
+- Group Members: ${groupMembers.length}
     `);
   } catch (error) {
     console.error('❌ Seeding failed:', error);
