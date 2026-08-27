@@ -12,6 +12,32 @@
   --brand-3: #a855f7;
 }
 
+:root[data-theme="light"] {
+  --background: #f7f8fc;
+  --background-elevated: #ffffff;
+  --foreground: #0f1424;
+  --muted: #5b6483;
+  --border: rgba(15, 20, 36, 0.1);
+  --card: rgba(15, 20, 36, 0.03);
+  --brand: #0d9488;
+  --brand-2: #4f46e5;
+  --brand-3: #9333ea;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --background: #f7f8fc;
+    --background-elevated: #ffffff;
+    --foreground: #0f1424;
+    --muted: #5b6483;
+    --border: rgba(15, 20, 36, 0.1);
+    --card: rgba(15, 20, 36, 0.03);
+    --brand: #0d9488;
+    --brand-2: #4f46e5;
+    --brand-3: #9333ea;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-background-elevated: var(--background-elevated);
@@ -65,7 +91,7 @@ body {
 }
 
 .text-gradient {
-  background: linear-gradient(100deg, #ffffff 0%, #c4b5fd 45%, #5eead4 100%);
+  background: linear-gradient(100deg, var(--foreground) 0%, #c4b5fd 45%, #5eead4 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -78,7 +104,7 @@ body {
 .card-hover:hover {
   transform: translateY(-4px);
   border-color: rgba(45, 212, 191, 0.4);
-  background: rgba(255, 255, 255, 0.045);
+  background: var(--card);
 }
 
 @keyframes float {
@@ -103,7 +129,7 @@ body {
 
 ::selection {
   background: rgba(45, 212, 191, 0.28);
-  color: #fff;
+  color: var(--foreground);
 }
 
 * {
