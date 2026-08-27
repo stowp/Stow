@@ -395,7 +395,6 @@ fn flexible_withdraw_exact_balance_succeeds() {
 /// Locked over-withdrawal: once past the unlock time, attempting to withdraw
 /// more than the locked plan balance must return `Error::InsufficientBalance`.
 #[test]
-#[ignore = "TODO(issue #40): implement locked::withdraw balance check"]
 fn locked_withdraw_over_balance_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -459,7 +458,6 @@ fn locked_withdraw_over_balance_rejected() {
 /// Locked exact-balance withdrawal must succeed once the lock has expired
 /// (boundary condition paired with the rejection test above).
 #[test]
-#[ignore = "TODO(issue #40): implement locked::withdraw balance check"]
 fn locked_withdraw_exact_balance_after_unlock_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
@@ -506,6 +504,56 @@ fn locked_withdraw_exact_balance_after_unlock_succeeds() {
     assert_eq!(
         plan.balance, 0,
         "locked plan balance must be zero after a full withdrawal",
+    );
+}
+
+/// Locked withdrawal before the unlock time must be rejected with
+/// `Error::StillLocked`, even when the requested amount is well within the
+/// plan's balance — isolates the time-lock guard from the balance guard
+/// (paired with `locked_withdraw_over_balance_rejected` above, which
+/// isolates the balance guard from the time-lock guard).
+#[test]
+fn locked_withdraw_before_unlock_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+
+    const LOCKED_AMOUNT: i128 = 50_000_000; // 50 USDC
+
+    mint(&env, &token, &token_admin, &owner, LOCKED_AMOUNT);
+
+    let now: u64 = 1_000_000;
+    env.ledger().set(LedgerInfo {
+        timestamp: now,
+        protocol_version: 22,
+        sequence_number: 100,
+        network_id: Default::default(),
+        base_reserve: 5_000_000,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: 3_110_400,
+    });
+
+    let unlock_at = now + 1_000;
+    let plan_id = client.locked_create(&owner, &LOCKED_AMOUNT, &unlock_at);
+
+    // Still before unlock_at — withdrawing well within balance must still
+    // fail with StillLocked, not succeed and not fail with a balance error.
+    let result = client.try_locked_withdraw(&owner, &plan_id, &(LOCKED_AMOUNT / 2));
+    assert_eq!(
+        result,
+        Err(Ok(Error::StillLocked)),
+        "expected StillLocked when withdrawing before unlock_at with sufficient balance",
+    );
+
+    // Plan balance must be untouched.
+    let plan = client.locked_plan(&plan_id);
+    assert_eq!(
+        plan.balance, LOCKED_AMOUNT,
+        "locked plan balance must not change after a rejected pre-unlock withdrawal",
     );
 }
 
