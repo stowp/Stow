@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
+import { apiFetch, ApiError } from "@/lib/api";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -23,14 +24,36 @@ export default function WaitlistForm() {
     setError("");
 
     try {
-      // TODO(issue): POST the email to a backend waitlist endpoint.
-      // Frontend-only for now — simulate a successful submission.
-      await new Promise((r) => setTimeout(r, 700));
+      const response = await apiFetch("/api/waitlist", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+        skipAuth: true,
+      });
+
+      if (response.status === 409) {
+        setStatus("success");
+        setEmail("");
+        return;
+      }
+
+      if (!response.ok) {
+        let message = "Something went wrong. Please try again.";
+        try {
+          const data = await response.json();
+          message = data.message || data.error || message;
+        } catch {
+          // response wasn't JSON, keep default message
+        }
+        throw new ApiError(message, response.status);
+      }
+
       setStatus("success");
       setEmail("");
-    } catch {
+    } catch (err) {
       setStatus("error");
-      setError("Something went wrong. Please try again.");
+      setError(
+        err instanceof ApiError ? err.message : "Something went wrong. Please try again.",
+      );
     }
   }
 
