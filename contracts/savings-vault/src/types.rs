@@ -2,7 +2,7 @@ use soroban_sdk::{contracttype, Address, Map, String, Vec};
 
 /// A flexible savings account: deposit and withdraw any time.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FlexibleAccount {
     pub owner: Address,
     /// Current balance held for this owner, in token stroops.

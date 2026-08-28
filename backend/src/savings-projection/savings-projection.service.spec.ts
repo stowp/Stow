@@ -3,6 +3,7 @@ import { SavingsProjectionService } from './savings-projection.service';
 import { GoalsService } from '../goals/goals.service';
 import { BalanceService } from '../savings/balance.service';
 import { GroupsService } from '../savings/groups.service';
+import { LockedPlansService } from '../savings/locked-plans.service';
 import { NotificationGeneratorService } from '../notifications/notification-generator.service';
 import { GoalStatus } from '../goals/entities/goal.entity';
 
@@ -15,6 +16,7 @@ describe('SavingsProjectionService', () => {
   };
   let balanceService: { credit: jest.Mock };
   let groupsService: { markSettled: jest.Mock };
+  let lockedPlansService: { upsertCreated: jest.Mock };
   let notificationGeneratorService: {
     handleGoalReached: jest.Mock;
     handleGroupSettled: jest.Mock;
@@ -28,6 +30,7 @@ describe('SavingsProjectionService', () => {
     };
     balanceService = { credit: jest.fn() };
     groupsService = { markSettled: jest.fn() };
+    lockedPlansService = { upsertCreated: jest.fn() };
     notificationGeneratorService = {
       handleGoalReached: jest.fn(),
       handleGroupSettled: jest.fn(),
@@ -39,6 +42,7 @@ describe('SavingsProjectionService', () => {
         { provide: GoalsService, useValue: goalsService },
         { provide: BalanceService, useValue: balanceService },
         { provide: GroupsService, useValue: groupsService },
+        { provide: LockedPlansService, useValue: lockedPlansService },
         {
           provide: NotificationGeneratorService,
           useValue: notificationGeneratorService,
@@ -55,6 +59,66 @@ describe('SavingsProjectionService', () => {
 
       expect(balanceService.credit).toHaveBeenCalledTimes(1);
       expect(balanceService.credit).toHaveBeenCalledWith('GALICE', '100');
+    });
+  });
+
+  describe('locked_created', () => {
+    it('upserts the projected plan with the decoded id, owner, amount, and unlock_at', async () => {
+      lockedPlansService.upsertCreated.mockResolvedValue({
+        on_chain_id: '1',
+        owner: 'GALICE',
+        balance: '20000000',
+        unlock_at: new Date(1_798_761_600 * 1000),
+      });
+
+      await service.apply('locked_created', {
+        id: '1',
+        owner: 'GALICE',
+        amount: '20000000',
+        unlock_at: 1_798_761_600,
+        timestamp: 1_700_000_000,
+      });
+
+      expect(lockedPlansService.upsertCreated).toHaveBeenCalledTimes(1);
+      expect(lockedPlansService.upsertCreated).toHaveBeenCalledWith({
+        onChainId: '1',
+        owner: 'GALICE',
+        balance: '20000000',
+        unlockAt: new Date(1_798_761_600 * 1000),
+      });
+    });
+
+    it('delegates duplicate-event idempotency to LockedPlansService.upsertCreated', async () => {
+      // The indexer may redeliver the same locked_created event (e.g. after
+      // a checkpoint replay). SavingsProjectionService always calls
+      // upsertCreated — the "don't duplicate" guarantee lives in
+      // LockedPlansService, which is unit-tested separately for that
+      // behavior (see locked-plans.service.spec.ts). Here we only confirm
+      // this service calls through with the same decoded params both times,
+      // so applying the same event twice is safe to do.
+      const params = {
+        id: '1',
+        owner: 'GALICE',
+        amount: '20000000',
+        unlock_at: 1_798_761_600,
+      };
+
+      await service.apply('locked_created', params);
+      await service.apply('locked_created', params);
+
+      expect(lockedPlansService.upsertCreated).toHaveBeenCalledTimes(2);
+      expect(lockedPlansService.upsertCreated).toHaveBeenNthCalledWith(1, {
+        onChainId: '1',
+        owner: 'GALICE',
+        balance: '20000000',
+        unlockAt: new Date(1_798_761_600 * 1000),
+      });
+      expect(lockedPlansService.upsertCreated).toHaveBeenNthCalledWith(2, {
+        onChainId: '1',
+        owner: 'GALICE',
+        balance: '20000000',
+        unlockAt: new Date(1_798_761_600 * 1000),
+      });
     });
   });
 
