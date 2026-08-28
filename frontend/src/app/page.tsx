@@ -23,6 +23,7 @@ import {
 import Navbar from "@/components/Navbar";
 import GithubIcon from "@/components/GithubIcon";
 import WaitlistForm from "@/components/WaitlistForm";
+import Logo from "@/components/Logo";
 
 const coreFeatures = [
   {
@@ -560,11 +561,8 @@ export default function Home() {
         <div className="mx-auto max-w-7xl">
           <div className="flex flex-col gap-10 md:flex-row md:justify-between">
             <div className="max-w-sm">
-              <div className="flex items-center gap-2.5 font-semibold">
-                <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-brand to-brand-2 text-sm font-bold text-background">
-                  S
-                </span>
-                <span className="text-lg">Stow</span>
+              <div className="font-semibold text-foreground">
+                <Logo />
               </div>
               <p className="mt-4 text-sm leading-relaxed text-muted">
                 A decentralized savings protocol on Stellar. Non-custodial,
