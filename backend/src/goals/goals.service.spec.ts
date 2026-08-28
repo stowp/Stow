@@ -70,7 +70,10 @@ describe('GoalsService – persistence', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         GoalsService,
-        { provide: getRepositoryToken(Goal), useValue: new FakeGoalRepository() },
+        {
+          provide: getRepositoryToken(Goal),
+          useValue: new FakeGoalRepository(),
+        },
       ],
     }).compile();
 
@@ -213,5 +216,88 @@ describe('GoalsService – listByOwnerPaginated', () => {
   it('returns an empty page for an owner with no goals', async () => {
     const result = await service.listByOwnerPaginated('GNOBODY');
     expect(result).toEqual({ data: [], total: 0, page: 1, limit: 20 });
+  });
+
+  describe('sort direction', () => {
+    // The shared beforeEach's 25-goal seed loop runs fast enough that
+    // real-clock created_at values can collide within the same
+    // millisecond, making ASC/DESC order unreliable to assert against.
+    // These tests seed their own small set with explicit, controlled
+    // timestamps via fake timers instead.
+    let sortService: GoalsService;
+
+    beforeEach(async () => {
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+      jest.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          GoalsService,
+          {
+            provide: getRepositoryToken(Goal),
+            useValue: new FakeGoalRepository(),
+          },
+        ],
+      }).compile();
+      sortService = module.get(GoalsService);
+
+      await sortService.upsertCreated({
+        onChainId: 'goal-earliest',
+        owner: 'GSORT',
+        name: 'Earliest',
+        targetAmount: '100',
+      });
+      jest.advanceTimersByTime(1000);
+      await sortService.upsertCreated({
+        onChainId: 'goal-middle',
+        owner: 'GSORT',
+        name: 'Middle',
+        targetAmount: '100',
+      });
+      jest.advanceTimersByTime(1000);
+      await sortService.upsertCreated({
+        onChainId: 'goal-latest',
+        owner: 'GSORT',
+        name: 'Latest',
+        targetAmount: '100',
+      });
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('defaults to newest-first (created_at DESC) when sort is omitted', async () => {
+      const result = await sortService.listByOwnerPaginated('GSORT', 1, 10);
+      expect(result.data.map((g) => g.on_chain_id)).toEqual([
+        'goal-latest',
+        'goal-middle',
+        'goal-earliest',
+      ]);
+    });
+
+    it('reverses to oldest-first when sort="asc"', async () => {
+      const result = await sortService.listByOwnerPaginated(
+        'GSORT',
+        1,
+        10,
+        'asc',
+      );
+      expect(result.data.map((g) => g.on_chain_id)).toEqual([
+        'goal-earliest',
+        'goal-middle',
+        'goal-latest',
+      ]);
+    });
+
+    it('explicit sort="desc" matches the default', async () => {
+      const result = await sortService.listByOwnerPaginated(
+        'GSORT',
+        1,
+        10,
+        'desc',
+      );
+      expect(result.data[0].on_chain_id).toBe('goal-latest');
+    });
   });
 });

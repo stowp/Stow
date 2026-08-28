@@ -51,21 +51,24 @@ export class LockedPlansService {
   }
 
   /**
-   * Lists an owner's locked plans, soonest-unlocking first, paginated.
-   * `limit` is capped at 100 to bound query cost, matching the convention
-   * used by `NotificationsService.findAllForUser`.
+   * Lists an owner's locked plans, soonest-unlocking first by default,
+   * paginated. `limit` is capped at 100 to bound query cost, matching the
+   * convention used by `NotificationsService.findAllForUser`. Always
+   * ordered by `unlock_at`; `sort` only controls the direction (default
+   * `asc`, soonest-unlocking first).
    */
   async listByOwner(
     owner: string,
     page = 1,
     limit = 20,
+    sort: 'asc' | 'desc' = 'asc',
   ): Promise<PaginatedLockedPlans> {
     const take = Math.min(limit, 100);
     const skip = (page - 1) * take;
 
     const [data, total] = await this.lockedPlanRepository.findAndCount({
       where: { owner },
-      order: { unlock_at: 'ASC' },
+      order: { unlock_at: sort === 'desc' ? 'DESC' : 'ASC' },
       skip,
       take,
     });

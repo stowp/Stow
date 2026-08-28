@@ -14,7 +14,7 @@ describe('SavingsProjectionService', () => {
     applyContribution: jest.Mock;
     markReached: jest.Mock;
   };
-  let balanceService: { credit: jest.Mock };
+  let balanceService: { credit: jest.Mock; setBalance: jest.Mock };
   let groupsService: { markSettled: jest.Mock };
   let lockedPlansService: { upsertCreated: jest.Mock };
   let notificationGeneratorService: {
@@ -28,7 +28,7 @@ describe('SavingsProjectionService', () => {
       applyContribution: jest.fn(),
       markReached: jest.fn(),
     };
-    balanceService = { credit: jest.fn() };
+    balanceService = { credit: jest.fn(), setBalance: jest.fn() };
     groupsService = { markSettled: jest.fn() };
     lockedPlansService = { upsertCreated: jest.fn() };
     notificationGeneratorService = {
@@ -59,6 +59,63 @@ describe('SavingsProjectionService', () => {
 
       expect(balanceService.credit).toHaveBeenCalledTimes(1);
       expect(balanceService.credit).toHaveBeenCalledWith('GALICE', '100');
+    });
+  });
+
+  describe('withdraw', () => {
+    it('sets the flexible balance to the event-provided new_balance exactly once', async () => {
+      await service.apply('withdraw', {
+        owner: 'GALICE',
+        amount: '40',
+        new_balance: '60',
+        timestamp: 1_700_000_000,
+      });
+
+      expect(balanceService.setBalance).toHaveBeenCalledTimes(1);
+      expect(balanceService.setBalance).toHaveBeenCalledWith('GALICE', '60');
+      expect(balanceService.credit).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent — applying the same withdraw event twice sets the same final balance both times', async () => {
+      // Unlike a decrement-by-amount approach, replaying the same withdraw
+      // event must not decrement the balance twice — using the contract's
+      // own new_balance as an absolute set is what makes this safe.
+      const params = {
+        owner: 'GALICE',
+        amount: '40',
+        new_balance: '60',
+      };
+
+      await service.apply('withdraw', params);
+      await service.apply('withdraw', params);
+
+      expect(balanceService.setBalance).toHaveBeenCalledTimes(2);
+      expect(balanceService.setBalance).toHaveBeenNthCalledWith(
+        1,
+        'GALICE',
+        '60',
+      );
+      expect(balanceService.setBalance).toHaveBeenNthCalledWith(
+        2,
+        'GALICE',
+        '60',
+      );
+    });
+
+    it('falls back to data.user / data.account when data.owner is absent', async () => {
+      await service.apply('withdraw', {
+        user: 'GBOB',
+        amount: '10',
+        new_balance: '90',
+      });
+      expect(balanceService.setBalance).toHaveBeenCalledWith('GBOB', '90');
+
+      await service.apply('withdraw', {
+        account: 'GCAROL',
+        amount: '10',
+        new_balance: '5',
+      });
+      expect(balanceService.setBalance).toHaveBeenCalledWith('GCAROL', '5');
     });
   });
 
@@ -207,6 +264,7 @@ describe('SavingsProjectionService', () => {
         service.apply('some_unhandled_topic', {}),
       ).resolves.toBeUndefined();
       expect(balanceService.credit).not.toHaveBeenCalled();
+      expect(balanceService.setBalance).not.toHaveBeenCalled();
       expect(goalsService.markReached).not.toHaveBeenCalled();
       expect(groupsService.markSettled).not.toHaveBeenCalled();
     });
