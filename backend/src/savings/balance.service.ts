@@ -44,6 +44,31 @@ export class BalanceService {
     return saved;
   }
 
+  /**
+   * Sets the account's balance to an absolute value and invalidates cache.
+   *
+   * Used for the `withdraw` projection instead of a `debit`-by-delta
+   * method: the on-chain `withdraw` event already carries the contract's
+   * own post-withdrawal balance (`new_balance`), so setting to that value
+   * directly is idempotent by construction — replaying the same event
+   * twice converges to the same final balance both times, unlike
+   * decrementing by the withdrawn amount, which would double-apply on
+   * redelivery. Mirrors `LockedPlansService.upsertCreated`'s
+   * set-absolute-state approach for the same reason.
+   */
+  async setBalance(account: string, amount: string): Promise<Balance> {
+    let balance = await this.balanceRepository.findOne({
+      where: { account },
+    });
+    if (!balance) {
+      balance = this.balanceRepository.create({ account, amount: '0' });
+    }
+    balance.amount = amount;
+    const saved = await this.balanceRepository.save(balance);
+    await this.cache.del(cacheKey(account));
+    return saved;
+  }
+
   async get(account: string): Promise<BalanceView> {
     const key = cacheKey(account);
     const cached = await this.cache.get<BalanceView>(key);

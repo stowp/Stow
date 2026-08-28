@@ -65,7 +65,11 @@ describe('BalanceService – caching', () => {
       const result = await service.get(ACCOUNT);
 
       expect(result.amount).toBe('0');
-      expect(cache.set).toHaveBeenCalledWith(CACHE_KEY, { account: ACCOUNT, amount: '0' }, 10_000);
+      expect(cache.set).toHaveBeenCalledWith(
+        CACHE_KEY,
+        { account: ACCOUNT, amount: '0' },
+        10_000,
+      );
     });
   });
 
@@ -89,8 +93,65 @@ describe('BalanceService – caching', () => {
 
       await service.credit(ACCOUNT, '75');
 
-      expect(repo.create).toHaveBeenCalledWith({ account: ACCOUNT, amount: '0' });
+      expect(repo.create).toHaveBeenCalledWith({
+        account: ACCOUNT,
+        amount: '0',
+      });
       expect(cache.del).toHaveBeenCalledWith(CACHE_KEY);
+    });
+  });
+
+  describe('setBalance', () => {
+    it('sets the balance to the given absolute amount and invalidates the cache', async () => {
+      const existing = { account: ACCOUNT, amount: '100' };
+      repo.findOne.mockResolvedValue(existing);
+      repo.save.mockResolvedValue({ ...existing, amount: '40' });
+      cache.del.mockResolvedValue(undefined);
+
+      await service.setBalance(ACCOUNT, '40');
+
+      expect(repo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ account: ACCOUNT, amount: '40' }),
+      );
+      expect(cache.del).toHaveBeenCalledWith(CACHE_KEY);
+    });
+
+    it('creates a new balance record when none exists', async () => {
+      repo.findOne.mockResolvedValue(null);
+      repo.create.mockReturnValue({ account: ACCOUNT, amount: '0' });
+      repo.save.mockResolvedValue({ account: ACCOUNT, amount: '25' });
+      cache.del.mockResolvedValue(undefined);
+
+      await service.setBalance(ACCOUNT, '25');
+
+      expect(repo.create).toHaveBeenCalledWith({
+        account: ACCOUNT,
+        amount: '0',
+      });
+      expect(repo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: '25' }),
+      );
+    });
+
+    it('is idempotent — applying the same value twice converges to the same balance', async () => {
+      const existing = { account: ACCOUNT, amount: '100' };
+      repo.findOne
+        .mockResolvedValueOnce(existing)
+        .mockResolvedValueOnce({ account: ACCOUNT, amount: '60' });
+      repo.save.mockImplementation((entity) => Promise.resolve(entity));
+      cache.del.mockResolvedValue(undefined);
+
+      await service.setBalance(ACCOUNT, '60');
+      await service.setBalance(ACCOUNT, '60');
+
+      expect(repo.save).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ amount: '60' }),
+      );
+      expect(repo.save).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ amount: '60' }),
+      );
     });
   });
 
@@ -107,7 +168,9 @@ describe('BalanceService – caching', () => {
 
       const result = await service.findAccount(ACCOUNT);
 
-      expect(repo.findOne).toHaveBeenCalledWith({ where: { account: ACCOUNT } });
+      expect(repo.findOne).toHaveBeenCalledWith({
+        where: { account: ACCOUNT },
+      });
       expect(result).toEqual({
         account: ACCOUNT,
         amount: '5000000',

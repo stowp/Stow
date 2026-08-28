@@ -72,6 +72,18 @@ export class SavingsProjectionService {
         break;
       }
 
+      case 'withdraw': {
+        // Set to the contract's own post-withdrawal balance rather than
+        // decrementing by the withdrawn amount — see BalanceService.setBalance
+        // for why this is what makes replaying the same event idempotent.
+        const account = data.owner ?? data.user ?? data.account;
+        await this.balanceService.setBalance(
+          String(account),
+          String(data.new_balance),
+        );
+        break;
+      }
+
       case 'group_split_settled': {
         const { changed } = await this.groupsService.markSettled(
           String(data.id ?? data.group_id),
