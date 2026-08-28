@@ -13,6 +13,7 @@ import { VerifyChallengeDto } from './dto/verify-challenge.dto';
 import { VerifyWalletDto } from './dto/verify-wallet.dto';
 import { RateLimitStatusDto } from './dto/rate-limit-status.dto';
 import { PasskeyAuthenticationFinishDto } from './dto/passkey-authentication.dto';
+import { PasskeyRegistrationFinishDto } from './dto/passkey-registration.dto';
 import {
   RefreshTokenResponseDto,
   RotateRefreshTokenDto,
@@ -74,7 +75,8 @@ export class AuthController {
   @Post('passkey/authenticate/begin')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Begin a passkey login: get options for navigator.credentials.get()',
+    summary:
+      'Begin a passkey login: get options for navigator.credentials.get()',
   })
   @ApiResponse({ status: 200, description: 'WebAuthn authentication options' })
   async beginPasskeyAuthentication() {
@@ -93,12 +95,46 @@ export class AuthController {
   })
   @ApiResponse({
     status: 401,
-    description: 'Unauthorized - invalid, expired, or unrecognized passkey assertion',
+    description:
+      'Unauthorized - invalid, expired, or unrecognized passkey assertion',
   })
   async finishPasskeyAuthentication(
     @Body() dto: PasskeyAuthenticationFinishDto,
   ) {
     return this.authService.finishPasskeyAuthentication(dto.response);
+  }
+
+  @Post('passkey/register/begin')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Begin registering a new passkey for the current user: get options for navigator.credentials.create()',
+  })
+  @ApiResponse({ status: 200, description: 'WebAuthn registration options' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async beginPasskeyRegistration(@CurrentUser() user: User) {
+    return this.authService.beginPasskeyRegistration(user);
+  }
+
+  @Post('passkey/register/finish')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Complete passkey registration by verifying and storing the new credential',
+  })
+  @ApiResponse({ status: 200, description: 'The stored credential summary' })
+  @ApiResponse({
+    status: 401,
+    description:
+      'Unauthorized - invalid, expired challenge, or a credential already registered under that id',
+  })
+  async finishPasskeyRegistration(
+    @CurrentUser() user: User,
+    @Body() dto: PasskeyRegistrationFinishDto,
+  ) {
+    return this.authService.finishPasskeyRegistration(user, dto.response);
   }
 
   @Get('rate-limit')
