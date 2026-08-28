@@ -7,7 +7,10 @@ import { Keypair } from '@stellar/stellar-sdk';
 import {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
   type AuthenticationResponseJSON,
+  type RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import { Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
@@ -20,6 +23,8 @@ import { AuthService } from './auth.service';
 jest.mock('@simplewebauthn/server', () => ({
   generateAuthenticationOptions: jest.fn(),
   verifyAuthenticationResponse: jest.fn(),
+  generateRegistrationOptions: jest.fn(),
+  verifyRegistrationResponse: jest.fn(),
 }));
 
 type UsersRepoMock = jest.Mocked<
@@ -39,7 +44,7 @@ type AuthAuditEventRepoMock = jest.Mocked<
 >;
 
 type WebAuthnCredentialRepoMock = jest.Mocked<
-  Pick<Repository<WebAuthnCredential>, 'findOneBy' | 'save'>
+  Pick<Repository<WebAuthnCredential>, 'findOneBy' | 'find' | 'create' | 'save'>
 >;
 
 /** Builds a fake AuthenticationResponseJSON whose clientDataJSON echoes `challenge`. */
@@ -67,6 +72,32 @@ function buildAssertionResponse(
     },
     ...overrides,
   } as unknown as AuthenticationResponseJSON;
+}
+
+/** Builds a fake RegistrationResponseJSON whose clientDataJSON echoes `challenge`. */
+function buildAttestationResponse(
+  challenge: string,
+  overrides: Partial<RegistrationResponseJSON> = {},
+): RegistrationResponseJSON {
+  const clientDataJSON = Buffer.from(
+    JSON.stringify({
+      type: 'webauthn.create',
+      challenge,
+      origin: 'http://localhost:3000',
+    }),
+  ).toString('base64url');
+
+  return {
+    id: 'new-cred-id-1',
+    rawId: 'new-cred-id-1',
+    type: 'public-key',
+    clientExtensionResults: {},
+    response: {
+      clientDataJSON,
+      attestationObject: 'attestation-object-bytes',
+    },
+    ...overrides,
+  } as unknown as RegistrationResponseJSON;
 }
 
 describe('AuthService', () => {
@@ -132,6 +163,11 @@ describe('AuthService', () => {
           provide: getRepositoryToken(WebAuthnCredential),
           useValue: {
             findOneBy: jest.fn(),
+            find: jest.fn().mockResolvedValue([]),
+            create: jest.fn(
+              (entity: Partial<WebAuthnCredential>) =>
+                entity as WebAuthnCredential,
+            ),
             save: jest.fn((entity: WebAuthnCredential) =>
               Promise.resolve(entity),
             ),
@@ -638,9 +674,7 @@ describe('AuthService', () => {
         await service.beginPasskeyAuthentication();
         webAuthnCredentialsRepository.findOneBy.mockResolvedValue(null);
 
-        const assertion = buildAssertionResponse(
-          'test-challenge-unknown-cred',
-        );
+        const assertion = buildAssertionResponse('test-challenge-unknown-cred');
 
         await expect(
           service.finishPasskeyAuthentication(assertion),
@@ -682,6 +716,275 @@ describe('AuthService', () => {
         await expect(
           service.finishPasskeyAuthentication(assertion),
         ).rejects.toThrow('Invalid passkey assertion');
+      });
+    });
+  });
+
+  describe('passkey (WebAuthn) registration', () => {
+    const mockGenerateRegOptions = generateRegistrationOptions as jest.Mock;
+    const mockVerifyReg = verifyRegistrationResponse as jest.Mock;
+
+    beforeEach(() => {
+      mockGenerateRegOptions.mockReset();
+      mockVerifyReg.mockReset();
+    });
+
+    const registeringUser = {
+      id: 'user-reg-1',
+      stellar_address: 'GREGUSER',
+      username: 'alice_saver',
+    } as User;
+
+    describe('beginPasskeyRegistration', () => {
+      it('returns generated options and stores the challenge keyed to the calling user', async () => {
+        mockGenerateRegOptions.mockResolvedValue({
+          challenge: 'reg-challenge-abc',
+          rp: { id: 'localhost', name: 'Stow' },
+          user: {
+            id: 'user-reg-1',
+            name: 'alice_saver',
+            displayName: 'alice_saver',
+          },
+          pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
+        });
+
+        const options = await service.beginPasskeyRegistration(registeringUser);
+
+        expect(options.challenge).toBe('reg-challenge-abc');
+        expect(mockGenerateRegOptions).toHaveBeenCalledWith(
+          expect.objectContaining({
+            userName: 'alice_saver',
+            supportedAlgorithmIDs: [-7],
+          }),
+        );
+
+        const cache = (
+          service as unknown as {
+            passkeyRegistrationChallengeCache: Map<
+              string,
+              { userId: string; expiresAt: number; used: boolean }
+            >;
+          }
+        ).passkeyRegistrationChallengeCache;
+        expect(cache.get('reg-challenge-abc')).toEqual(
+          expect.objectContaining({ userId: 'user-reg-1', used: false }),
+        );
+      });
+
+      it('excludes the credentials the user has already registered', async () => {
+        webAuthnCredentialsRepository.find.mockResolvedValue([
+          {
+            credential_id: 'existing-cred-1',
+            transports: ['internal'],
+          } as WebAuthnCredential,
+        ]);
+        mockGenerateRegOptions.mockResolvedValue({ challenge: 'c' });
+
+        await service.beginPasskeyRegistration(registeringUser);
+
+        expect(webAuthnCredentialsRepository.find).toHaveBeenCalledWith({
+          where: { user_id: 'user-reg-1' },
+        });
+        expect(mockGenerateRegOptions).toHaveBeenCalledWith(
+          expect.objectContaining({
+            excludeCredentials: [
+              { id: 'existing-cred-1', transports: ['internal'] },
+            ],
+          }),
+        );
+      });
+
+      it('falls back to the Stellar address when the user has no username', async () => {
+        mockGenerateRegOptions.mockResolvedValue({ challenge: 'c' });
+        const userNoUsername = {
+          id: 'user-reg-2',
+          stellar_address: 'GNOUSERNAME',
+          username: null,
+        } as User;
+
+        await service.beginPasskeyRegistration(userNoUsername);
+
+        expect(mockGenerateRegOptions).toHaveBeenCalledWith(
+          expect.objectContaining({
+            userName: 'GNOUSERNAME',
+            userDisplayName: 'GNOUSERNAME',
+          }),
+        );
+      });
+
+      it('uses an explicit display name when provided', async () => {
+        mockGenerateRegOptions.mockResolvedValue({ challenge: 'c' });
+
+        await service.beginPasskeyRegistration(
+          registeringUser,
+          'Alice on iPhone',
+        );
+
+        expect(mockGenerateRegOptions).toHaveBeenCalledWith(
+          expect.objectContaining({ userDisplayName: 'Alice on iPhone' }),
+        );
+      });
+    });
+
+    describe('finishPasskeyRegistration', () => {
+      const verifiedResult = {
+        verified: true,
+        registrationInfo: {
+          credential: {
+            id: 'new-cred-id-1',
+            publicKey: new Uint8Array([1, 2, 3, 4]),
+            counter: 0,
+            transports: ['internal'],
+          },
+          credentialDeviceType: 'singleDevice',
+          credentialBackedUp: false,
+        },
+      };
+
+      it('persists a new credential for the calling user on a valid attestation', async () => {
+        mockGenerateRegOptions.mockResolvedValue({
+          challenge: 'reg-challenge-finish',
+        });
+        await service.beginPasskeyRegistration(registeringUser);
+
+        webAuthnCredentialsRepository.findOneBy.mockResolvedValue(null);
+        mockVerifyReg.mockResolvedValue(verifiedResult);
+
+        const attestation = buildAttestationResponse('reg-challenge-finish');
+        const saved = await service.finishPasskeyRegistration(
+          registeringUser,
+          attestation,
+        );
+
+        expect(webAuthnCredentialsRepository.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            user_id: 'user-reg-1',
+            credential_id: 'new-cred-id-1',
+            counter: '0',
+            device_type: 'singleDevice',
+            backed_up: false,
+            transports: ['internal'],
+          }),
+        );
+        expect(webAuthnCredentialsRepository.save).toHaveBeenCalled();
+        expect(saved).toEqual(
+          expect.objectContaining({ credential_id: 'new-cred-id-1' }),
+        );
+      });
+
+      it('rejects an attestation for an unknown/expired challenge', async () => {
+        const attestation = buildAttestationResponse(
+          'never-issued-reg-challenge',
+        );
+
+        await expect(
+          service.finishPasskeyRegistration(registeringUser, attestation),
+        ).rejects.toThrow(UnauthorizedException);
+        expect(mockVerifyReg).not.toHaveBeenCalled();
+      });
+
+      it('rejects when the challenge belongs to a different user', async () => {
+        mockGenerateRegOptions.mockResolvedValue({
+          challenge: 'reg-challenge-other-user',
+        });
+        await service.beginPasskeyRegistration(registeringUser);
+
+        const otherUser = {
+          id: 'user-reg-DIFFERENT',
+          stellar_address: 'GOTHER',
+        } as User;
+
+        const attestation = buildAttestationResponse(
+          'reg-challenge-other-user',
+        );
+
+        await expect(
+          service.finishPasskeyRegistration(otherUser, attestation),
+        ).rejects.toThrow(
+          'Passkey registration challenge does not belong to this user',
+        );
+        expect(mockVerifyReg).not.toHaveBeenCalled();
+      });
+
+      it('rejects a challenge that has already been used (replay prevention)', async () => {
+        mockGenerateRegOptions.mockResolvedValue({
+          challenge: 'reg-challenge-replay',
+        });
+        await service.beginPasskeyRegistration(registeringUser);
+        webAuthnCredentialsRepository.findOneBy.mockResolvedValue(null);
+        mockVerifyReg.mockResolvedValue(verifiedResult);
+
+        const attestation = buildAttestationResponse('reg-challenge-replay');
+        await service.finishPasskeyRegistration(registeringUser, attestation);
+
+        await expect(
+          service.finishPasskeyRegistration(registeringUser, attestation),
+        ).rejects.toThrow(UnauthorizedException);
+      });
+
+      it('rejects an attestation that fails cryptographic verification', async () => {
+        mockGenerateRegOptions.mockResolvedValue({
+          challenge: 'reg-challenge-bad-attestation',
+        });
+        await service.beginPasskeyRegistration(registeringUser);
+        mockVerifyReg.mockResolvedValue({ verified: false });
+
+        const attestation = buildAttestationResponse(
+          'reg-challenge-bad-attestation',
+        );
+
+        await expect(
+          service.finishPasskeyRegistration(registeringUser, attestation),
+        ).rejects.toThrow('Invalid passkey registration response');
+        expect(webAuthnCredentialsRepository.save).not.toHaveBeenCalled();
+      });
+
+      it('rejects when verification throws (e.g. malformed attestation)', async () => {
+        mockGenerateRegOptions.mockResolvedValue({
+          challenge: 'reg-challenge-throws',
+        });
+        await service.beginPasskeyRegistration(registeringUser);
+        mockVerifyReg.mockRejectedValue(new Error('bad attestation encoding'));
+
+        const attestation = buildAttestationResponse('reg-challenge-throws');
+
+        await expect(
+          service.finishPasskeyRegistration(registeringUser, attestation),
+        ).rejects.toThrow('Invalid passkey registration response');
+      });
+
+      it('rejects re-registering a credential id that already exists', async () => {
+        mockGenerateRegOptions.mockResolvedValue({
+          challenge: 'reg-challenge-dupe',
+        });
+        await service.beginPasskeyRegistration(registeringUser);
+        webAuthnCredentialsRepository.findOneBy.mockResolvedValue({
+          credential_id: 'new-cred-id-1',
+        } as WebAuthnCredential);
+        mockVerifyReg.mockResolvedValue(verifiedResult);
+
+        const attestation = buildAttestationResponse('reg-challenge-dupe');
+
+        await expect(
+          service.finishPasskeyRegistration(registeringUser, attestation),
+        ).rejects.toThrow('This passkey is already registered');
+        expect(webAuthnCredentialsRepository.save).not.toHaveBeenCalled();
+      });
+
+      it('constrains verification to the secp256r1 (ES256) COSE algorithm', async () => {
+        mockGenerateRegOptions.mockResolvedValue({
+          challenge: 'reg-challenge-alg',
+        });
+        await service.beginPasskeyRegistration(registeringUser);
+        webAuthnCredentialsRepository.findOneBy.mockResolvedValue(null);
+        mockVerifyReg.mockResolvedValue(verifiedResult);
+
+        const attestation = buildAttestationResponse('reg-challenge-alg');
+        await service.finishPasskeyRegistration(registeringUser, attestation);
+
+        expect(mockVerifyReg).toHaveBeenCalledWith(
+          expect.objectContaining({ supportedAlgorithmIDs: [-7] }),
+        );
       });
     });
   });

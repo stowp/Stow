@@ -6,6 +6,11 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { VerifyChallengeDto } from './dto/verify-challenge.dto';
 import { PasskeyAuthenticationFinishDto } from './dto/passkey-authentication.dto';
+import {
+  PasskeyRegistrationBeginDto,
+  PasskeyRegistrationFinishDto,
+} from './dto/passkey-registration.dto';
+import { WebAuthnCredential } from './entities/webauthn-credential.entity';
 import { RateLimitService } from './rate-limit.service';
 
 const mockAuthService = () => ({
@@ -19,6 +24,8 @@ const mockAuthService = () => ({
   rotateRefreshToken: jest.fn(),
   beginPasskeyAuthentication: jest.fn(),
   finishPasskeyAuthentication: jest.fn(),
+  beginPasskeyRegistration: jest.fn(),
+  finishPasskeyRegistration: jest.fn(),
 });
 
 const mockConfigService = () => ({
@@ -168,8 +175,112 @@ describe('AuthController', () => {
         new UnauthorizedException('Invalid passkey assertion'),
       );
 
+      await expect(controller.finishPasskeyAuthentication(dto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+  });
+
+  describe('beginPasskeyRegistration', () => {
+    const currentUser = Object.assign(new User(), {
+      id: 'uuid-reg-1',
+      stellar_address: 'GREGUSER',
+    });
+
+    it('returns the WebAuthn registration options from the service, passing the current user and display name', async () => {
+      const options = {
+        challenge: 'reg-challenge',
+        rp: { id: 'localhost', name: 'Stow' },
+      };
+      authService.beginPasskeyRegistration.mockResolvedValue(options);
+
+      const dto: PasskeyRegistrationBeginDto = { display_name: 'My Phone' };
+      const result = await controller.beginPasskeyRegistration(
+        currentUser,
+        dto,
+      );
+
+      expect(authService.beginPasskeyRegistration).toHaveBeenCalledWith(
+        currentUser,
+        'My Phone',
+      );
+      expect(result).toEqual(options);
+    });
+
+    it('passes through an undefined display name when none is given', async () => {
+      authService.beginPasskeyRegistration.mockResolvedValue({
+        challenge: 'reg-challenge',
+      });
+
+      await controller.beginPasskeyRegistration(currentUser, {});
+
+      expect(authService.beginPasskeyRegistration).toHaveBeenCalledWith(
+        currentUser,
+        undefined,
+      );
+    });
+  });
+
+  describe('finishPasskeyRegistration', () => {
+    const currentUser = Object.assign(new User(), {
+      id: 'uuid-reg-1',
+      stellar_address: 'GREGUSER',
+    });
+
+    const dto = {
+      response: {
+        id: 'new-cred-id-1',
+        rawId: 'new-cred-id-1',
+        type: 'public-key',
+        response: {
+          clientDataJSON: 'client-data',
+          attestationObject: 'attestation-object',
+        },
+        clientExtensionResults: {},
+      },
+    } as unknown as PasskeyRegistrationFinishDto;
+
+    it('returns a shaped credential summary (no public key bytes) for a valid attestation', async () => {
+      const credential = Object.assign(new WebAuthnCredential(), {
+        id: 'row-1',
+        user_id: 'uuid-reg-1',
+        credential_id: 'new-cred-id-1',
+        public_key: Buffer.from('should-not-be-returned'),
+        counter: '0',
+        device_type: 'singleDevice',
+        backed_up: false,
+        transports: null,
+        created_at: new Date('2026-01-01T00:00:00.000Z'),
+        last_used_at: null,
+      });
+      authService.finishPasskeyRegistration.mockResolvedValue(credential);
+
+      const result = await controller.finishPasskeyRegistration(
+        currentUser,
+        dto,
+      );
+
+      expect(authService.finishPasskeyRegistration).toHaveBeenCalledWith(
+        currentUser,
+        dto.response,
+      );
+      expect(result).toEqual({
+        id: 'row-1',
+        credential_id: 'new-cred-id-1',
+        device_type: 'singleDevice',
+        backed_up: false,
+        created_at: credential.created_at,
+      });
+      expect(result).not.toHaveProperty('public_key');
+    });
+
+    it('propagates UnauthorizedException for an invalid attestation', async () => {
+      authService.finishPasskeyRegistration.mockRejectedValue(
+        new UnauthorizedException('Invalid passkey registration response'),
+      );
+
       await expect(
-        controller.finishPasskeyAuthentication(dto),
+        controller.finishPasskeyRegistration(currentUser, dto),
       ).rejects.toThrow(UnauthorizedException);
     });
   });

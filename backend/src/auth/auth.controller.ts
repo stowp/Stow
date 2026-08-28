@@ -14,6 +14,10 @@ import { VerifyWalletDto } from './dto/verify-wallet.dto';
 import { RateLimitStatusDto } from './dto/rate-limit-status.dto';
 import { PasskeyAuthenticationFinishDto } from './dto/passkey-authentication.dto';
 import {
+  PasskeyRegistrationBeginDto,
+  PasskeyRegistrationFinishDto,
+} from './dto/passkey-registration.dto';
+import {
   RefreshTokenResponseDto,
   RotateRefreshTokenDto,
 } from './dto/refresh-token.dto';
@@ -74,7 +78,8 @@ export class AuthController {
   @Post('passkey/authenticate/begin')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Begin a passkey login: get options for navigator.credentials.get()',
+    summary:
+      'Begin a passkey login: get options for navigator.credentials.get()',
   })
   @ApiResponse({ status: 200, description: 'WebAuthn authentication options' })
   async beginPasskeyAuthentication() {
@@ -93,12 +98,64 @@ export class AuthController {
   })
   @ApiResponse({
     status: 401,
-    description: 'Unauthorized - invalid, expired, or unrecognized passkey assertion',
+    description:
+      'Unauthorized - invalid, expired, or unrecognized passkey assertion',
   })
   async finishPasskeyAuthentication(
     @Body() dto: PasskeyAuthenticationFinishDto,
   ) {
     return this.authService.finishPasskeyAuthentication(dto.response);
+  }
+
+  @Post('passkey/register/begin')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Begin passkey registration: get options for navigator.credentials.create()',
+    description:
+      "Requires an authenticated session (via Stellar wallet signature or an existing passkey). Registration attaches a new passkey credential to the caller's account for future logins.",
+  })
+  @ApiResponse({ status: 200, description: 'WebAuthn registration options' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async beginPasskeyRegistration(
+    @CurrentUser() user: User,
+    @Body() dto: PasskeyRegistrationBeginDto,
+  ) {
+    return this.authService.beginPasskeyRegistration(user, dto.display_name);
+  }
+
+  @Post('passkey/register/finish')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Complete passkey registration by verifying the signed attestation and storing the credential',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'The newly registered passkey credential',
+  })
+  @ApiResponse({
+    status: 401,
+    description:
+      'Unauthorized - invalid, expired attestation, or the challenge does not belong to the caller',
+  })
+  async finishPasskeyRegistration(
+    @CurrentUser() user: User,
+    @Body() dto: PasskeyRegistrationFinishDto,
+  ) {
+    const credential = await this.authService.finishPasskeyRegistration(
+      user,
+      dto.response,
+    );
+    return {
+      id: credential.id,
+      credential_id: credential.credential_id,
+      device_type: credential.device_type,
+      backed_up: credential.backed_up,
+      created_at: credential.created_at,
+    };
   }
 
   @Get('rate-limit')

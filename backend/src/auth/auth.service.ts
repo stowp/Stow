@@ -13,9 +13,13 @@ import { Keypair } from '@stellar/stellar-sdk';
 import {
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
   type AuthenticationResponseJSON,
+  type RegistrationResponseJSON,
   type AuthenticatorTransportFuture,
   type PublicKeyCredentialRequestOptionsJSON,
+  type PublicKeyCredentialCreationOptionsJSON,
 } from '@simplewebauthn/server';
 import { IsNull, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
@@ -39,6 +43,18 @@ export class AuthService implements OnModuleInit {
     { expiresAt: number; used: boolean }
   >();
   private readonly PASSKEY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  /**
+   * Pending passkey *registration* challenges, keyed by the challenge
+   * itself (mirrors `passkeyChallengeCache`). Unlike login, registration
+   * also records which authenticated user started the ceremony so
+   * `finishPasskeyRegistration` can refuse to attach the resulting
+   * credential to a different user than the one who began it.
+   */
+  private passkeyRegistrationChallengeCache = new Map<
+    string,
+    { userId: string; expiresAt: number; used: boolean }
+  >();
 
   private readonly logger = new Logger(AuthService.name);
 
@@ -79,6 +95,15 @@ export class AuthService implements OnModuleInit {
     for (const [key, entry] of this.passkeyChallengeCache.entries()) {
       if (now > entry.expiresAt) {
         this.passkeyChallengeCache.delete(key);
+        removed++;
+      }
+    }
+    for (const [
+      key,
+      entry,
+    ] of this.passkeyRegistrationChallengeCache.entries()) {
+      if (now > entry.expiresAt) {
+        this.passkeyRegistrationChallengeCache.delete(key);
         removed++;
       }
     }
@@ -351,7 +376,8 @@ export class AuthService implements OnModuleInit {
 
   /** Starts a passkey login: returns options for `navigator.credentials.get()`. */
   async beginPasskeyAuthentication(): Promise<PublicKeyCredentialRequestOptionsJSON> {
-    const rpID = this.configService.get<string>('WEBAUTHN_RP_ID') ?? 'localhost';
+    const rpID =
+      this.configService.get<string>('WEBAUTHN_RP_ID') ?? 'localhost';
 
     const options = await generateAuthenticationOptions({
       rpID,
@@ -396,7 +422,8 @@ export class AuthService implements OnModuleInit {
       throw new UnauthorizedException('Passkey not recognized');
     }
 
-    const rpID = this.configService.get<string>('WEBAUTHN_RP_ID') ?? 'localhost';
+    const rpID =
+      this.configService.get<string>('WEBAUTHN_RP_ID') ?? 'localhost';
     const origin =
       this.configService.get<string>('WEBAUTHN_ORIGIN') ??
       'http://localhost:3000';
@@ -410,7 +437,11 @@ export class AuthService implements OnModuleInit {
         expectedRPID: rpID,
         credential: {
           id: credential.credential_id,
-          publicKey: credential.public_key,
+          // Stored as a Node Buffer (bytea column); @simplewebauthn/server's
+          // types want a plain Uint8Array<ArrayBuffer> — a Buffer already
+          // satisfies that shape at runtime, but re-wrapping keeps the
+          // static types honest without a cast.
+          publicKey: new Uint8Array(credential.public_key),
           counter: Number(credential.counter),
           transports: (credential.transports ?? undefined) as
             | AuthenticatorTransportFuture[]
@@ -460,9 +491,7 @@ export class AuthService implements OnModuleInit {
    */
   private extractChallengeFromClientData(clientDataJSON: string): string {
     try {
-      const decoded = Buffer.from(clientDataJSON, 'base64url').toString(
-        'utf8',
-      );
+      const decoded = Buffer.from(clientDataJSON, 'base64url').toString('utf8');
       const parsed = JSON.parse(decoded) as { challenge?: string };
       if (!parsed.challenge) {
         throw new Error('missing challenge');
@@ -471,5 +500,159 @@ export class AuthService implements OnModuleInit {
     } catch {
       throw new UnauthorizedException('Malformed passkey assertion');
     }
+  }
+
+  // --- passkey (WebAuthn) registration ------------------------------------
+  //
+  // Registration attaches a passkey credential to an ALREADY-authenticated
+  // user (they've signed in via a Stellar wallet signature or an existing
+  // passkey) so they can use a passkey for future logins — it does not
+  // create a new user by itself. This mirrors typical WebAuthn UX: a
+  // passkey is offered as an upgrade during/after onboarding, not as the
+  // only way to first prove who you are.
+  //
+  // Only ES256 (COSE alg -7, secp256r1/P-256) credentials are accepted,
+  // per this feature's scope — the broadest supported algorithm across
+  // platform authenticators (Touch ID, Windows Hello, Android) and the one
+  // explicitly requested for smart-wallet passkeys.
+  private static readonly SECP256R1_COSE_ALG_ID = -7;
+
+  /**
+   * Starts a passkey registration ceremony for `user`: returns options for
+   * `navigator.credentials.create()`, excluding any credentials the user
+   * has already registered so the authenticator won't offer to re-register
+   * the same passkey.
+   */
+  async beginPasskeyRegistration(
+    user: User,
+    displayName?: string,
+  ): Promise<PublicKeyCredentialCreationOptionsJSON> {
+    const rpID =
+      this.configService.get<string>('WEBAUTHN_RP_ID') ?? 'localhost';
+    const rpName = this.configService.get<string>('WEBAUTHN_RP_NAME') ?? 'Stow';
+
+    const existingCredentials = await this.webAuthnCredentialsRepository.find({
+      where: { user_id: user.id },
+    });
+
+    const options = await generateRegistrationOptions({
+      rpID,
+      rpName,
+      userName: user.username ?? user.stellar_address,
+      userDisplayName: displayName ?? user.username ?? user.stellar_address,
+      attestationType: 'none',
+      excludeCredentials: existingCredentials.map((credential) => ({
+        id: credential.credential_id,
+        transports: (credential.transports ?? undefined) as
+          | AuthenticatorTransportFuture[]
+          | undefined,
+      })),
+      authenticatorSelection: {
+        residentKey: 'preferred',
+        userVerification: 'preferred',
+      },
+      supportedAlgorithmIDs: [AuthService.SECP256R1_COSE_ALG_ID],
+    });
+
+    this.passkeyRegistrationChallengeCache.set(options.challenge, {
+      userId: user.id,
+      expiresAt: Date.now() + this.PASSKEY_TTL_MS,
+      used: false,
+    });
+
+    return options;
+  }
+
+  /**
+   * Completes a passkey registration ceremony: verifies the signed
+   * attestation against the challenge issued to `user` and, on success,
+   * persists a new `WebAuthnCredential` row for them.
+   */
+  async finishPasskeyRegistration(
+    user: User,
+    attestationResponse: RegistrationResponseJSON,
+  ): Promise<WebAuthnCredential> {
+    const challenge = this.extractChallengeFromClientData(
+      attestationResponse.response.clientDataJSON,
+    );
+
+    const challengeEntry =
+      this.passkeyRegistrationChallengeCache.get(challenge);
+    if (
+      !challengeEntry ||
+      challengeEntry.used ||
+      Date.now() > challengeEntry.expiresAt
+    ) {
+      throw new UnauthorizedException(
+        'No valid passkey registration challenge found or challenge expired',
+      );
+    }
+
+    // The challenge must have been issued to this exact user — otherwise
+    // one user could complete a ceremony another user started.
+    if (challengeEntry.userId !== user.id) {
+      throw new UnauthorizedException(
+        'Passkey registration challenge does not belong to this user',
+      );
+    }
+
+    const rpID =
+      this.configService.get<string>('WEBAUTHN_RP_ID') ?? 'localhost';
+    const origin =
+      this.configService.get<string>('WEBAUTHN_ORIGIN') ??
+      'http://localhost:3000';
+
+    let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
+    try {
+      verification = await verifyRegistrationResponse({
+        response: attestationResponse,
+        expectedChallenge: challenge,
+        expectedOrigin: origin,
+        expectedRPID: rpID,
+        supportedAlgorithmIDs: [AuthService.SECP256R1_COSE_ALG_ID],
+      });
+    } catch (error) {
+      this.logger.warn(`Passkey registration verification failed: ${error}`);
+      throw new UnauthorizedException('Invalid passkey registration response');
+    }
+
+    if (!verification.verified || !verification.registrationInfo) {
+      throw new UnauthorizedException('Invalid passkey registration response');
+    }
+
+    // Replay attack prevention: reject already-used challenges.
+    challengeEntry.used = true;
+
+    const { credential, credentialDeviceType, credentialBackedUp } =
+      verification.registrationInfo;
+
+    const existing = await this.webAuthnCredentialsRepository.findOneBy({
+      credential_id: credential.id,
+    });
+    if (existing) {
+      // The same physical/synced passkey was already registered (possibly
+      // by this same user re-registering, or — extremely unlikely given
+      // credential IDs are generated randomly by the authenticator — a
+      // collision). Either way, don't create a duplicate row.
+      throw new UnauthorizedException('This passkey is already registered');
+    }
+
+    const record = this.webAuthnCredentialsRepository.create({
+      user_id: user.id,
+      credential_id: credential.id,
+      public_key: Buffer.from(credential.publicKey),
+      counter: String(credential.counter),
+      device_type: credentialDeviceType,
+      backed_up: credentialBackedUp,
+      transports: credential.transports ?? null,
+    });
+
+    const saved = await this.webAuthnCredentialsRepository.save(record);
+
+    this.logger.debug(
+      `Passkey credential ${credential.id} registered for user ${user.id}`,
+    );
+
+    return saved;
   }
 }

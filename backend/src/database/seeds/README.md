@@ -39,13 +39,15 @@ npm run db:reset
 
 This will:
 
-1. Drop all seeded tables
-2. Display confirmation
+1. Refuse to run if `NODE_ENV=production`
+2. Truncate the savings schema's tables (`users`, `savings_accounts`, `goals`,
+   `groups`, `group_members`, `balances`, `locked_plans`, `anchor_deposits`) —
+   the schema itself is left intact, so this only clears data, not tables
+3. Display confirmation
 
-After resetting, run migrations and seed again:
+After resetting, seed again:
 
 ```bash
-npm run migration:run
 npm run seed
 ```
 

@@ -1,4 +1,5 @@
 import ProgressRing from "./ProgressRing";
+import { formatStroopsAmount } from "@/lib/currency";
 
 export interface GoalCardGoal {
   on_chain_id: string;
@@ -12,11 +13,6 @@ export interface GoalCardProps {
   goal: GoalCardGoal;
   onContribute?: (goalId: string) => void;
   className?: string;
-}
-
-function formatStroops(stroops: string): string {
-  const value = Number(stroops) / 10_000_000;
-  return value.toLocaleString(undefined, { maximumFractionDigits: 7 });
 }
 
 /**
@@ -44,7 +40,7 @@ export default function GoalCard({
         <div>
           <h3 className="text-lg font-semibold text-foreground">{goal.name}</h3>
           <p className="mt-1 text-sm text-muted">
-            {formatStroops(goal.current_amount)} / {formatStroops(goal.target_amount)} XLM
+            {formatStroopsAmount(goal.current_amount)} / {formatStroopsAmount(goal.target_amount)} XLM
           </p>
         </div>
         <ProgressRing percentage={percentage} label={`${goal.name} progress`} size={72} />

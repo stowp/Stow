@@ -54,11 +54,8 @@ export default function Navbar() {
       }`}
     >
       <nav className="mx-auto flex max-w-7xl items-center justify-between px-5 py-3.5 sm:px-8">
-        <a href="#top" className="flex items-center gap-2.5 font-semibold tracking-tight">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-brand to-brand-2 text-sm font-bold text-background shadow-lg shadow-brand/20">
-            S
-          </span>
-          <span className="text-lg">Stow</span>
+        <a href="#top" className="flex items-center font-semibold tracking-tight text-foreground">
+          <Logo />
         </a>
 
         <div className="hidden items-center gap-8 md:flex">

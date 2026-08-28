@@ -5,6 +5,7 @@ import { Target } from "lucide-react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useGoalClaim } from "@/hooks/useGoalClaim";
 import ErrorRetry from "@/components/ui/ErrorRetry";
+import { formatStroopsAmount } from "@/lib/currency";
 
 interface Goal {
   on_chain_id: string;
@@ -15,11 +16,6 @@ interface Goal {
 }
 
 type PageStatus = "loading" | "ready" | "not-found" | "error";
-
-function formatStroops(stroops: string): string {
-  const value = Number(stroops) / 10_000_000;
-  return value.toLocaleString(undefined, { maximumFractionDigits: 7 });
-}
 
 export default function GoalDetailPage({
   params,
@@ -168,7 +164,7 @@ export default function GoalDetailPage({
         <div className="rounded-2xl border border-border bg-card p-6 mb-6">
           <p className="text-sm text-muted mb-1">Progress</p>
           <p className="text-2xl font-semibold text-foreground">
-            {formatStroops(goal.current_amount)} / {formatStroops(goal.target_amount)} XLM
+            {formatStroopsAmount(goal.current_amount)} / {formatStroopsAmount(goal.target_amount)} XLM
           </p>
           <div className="mt-3 h-2 w-full rounded-full bg-white/5">
             <div
@@ -195,7 +191,7 @@ export default function GoalDetailPage({
           ) : showConfirm ? (
             <div className="space-y-3">
               <p className="text-sm text-foreground">
-                Claim {formatStroops(goal.current_amount)} XLM from this goal?
+                Claim {formatStroopsAmount(goal.current_amount)} XLM from this goal?
               </p>
               <div className="flex gap-3">
                 <button
