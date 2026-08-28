@@ -31,3 +31,19 @@ Object.defineProperty(window, "scrollY", {
   configurable: true,
   value: 0,
 });
+
+// Mock window.matchMedia (used by ThemeProvider for system theme detection)
+Object.defineProperty(window, "matchMedia", {
+  writable: true,
+  configurable: true,
+  value: (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }),
+});

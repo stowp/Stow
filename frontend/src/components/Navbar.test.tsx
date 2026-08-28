@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Navbar from "./Navbar";
+import { ThemeProvider } from "@/context/ThemeProvider";
+
+function renderNavbar() {
+  return render(
+    <ThemeProvider>
+      <Navbar />
+    </ThemeProvider>,
+  );
+}
 
 describe("Navbar", () => {
   beforeEach(() => {
@@ -17,7 +26,7 @@ describe("Navbar", () => {
   });
 
   it("renders the logo and navigation links", () => {
-    render(<Navbar />);
+    renderNavbar();
 
     expect(screen.getByText("Stow")).toBeInTheDocument();
     expect(screen.getByText("Features")).toBeInTheDocument();
@@ -28,7 +37,7 @@ describe("Navbar", () => {
   });
 
   it("renders CTA buttons in desktop view", () => {
-    render(<Navbar />);
+    renderNavbar();
 
     const githubLinks = screen.getAllByText("GitHub");
     const launchAppLinks = screen.getAllByText("Launch App");
@@ -39,7 +48,7 @@ describe("Navbar", () => {
 
   describe("Scroll Behavior", () => {
     it("adds backdrop blur when scrolled down", async () => {
-      render(<Navbar />);
+      renderNavbar();
 
       const header = screen.getByRole("banner");
 
@@ -58,7 +67,7 @@ describe("Navbar", () => {
     });
 
     it("does not add backdrop blur when scroll is minimal", () => {
-      render(<Navbar />);
+      renderNavbar();
 
       const header = screen.getByRole("banner");
 
@@ -70,7 +79,7 @@ describe("Navbar", () => {
     });
 
     it("removes backdrop blur when scrolled back to top", async () => {
-      render(<Navbar />);
+      renderNavbar();
 
       const header = screen.getByRole("banner");
 
@@ -95,7 +104,7 @@ describe("Navbar", () => {
   describe("Mobile Menu", () => {
     it("toggles mobile menu when button is clicked", async () => {
       const user = userEvent.setup();
-      render(<Navbar />);
+      renderNavbar();
 
       const menuButton = screen.getByRole("button", { name: /toggle menu/i });
 
@@ -113,7 +122,7 @@ describe("Navbar", () => {
 
     it("closes mobile menu when a link is clicked", async () => {
       const user = userEvent.setup();
-      render(<Navbar />);
+      renderNavbar();
 
       const menuButton = screen.getByRole("button", { name: /toggle menu/i });
 
@@ -168,7 +177,7 @@ describe("Navbar", () => {
         return section;
       });
 
-      render(<Navbar />);
+      renderNavbar();
 
       expect(global.IntersectionObserver).toHaveBeenCalled();
       expect(mockObserve).toHaveBeenCalled();
@@ -183,7 +192,7 @@ describe("Navbar", () => {
       section.id = "features";
       document.body.appendChild(section);
 
-      render(<Navbar />);
+      renderNavbar();
 
       // Find the Features link in the desktop nav
       const desktopLinks = screen.getAllByText("Features");
@@ -226,7 +235,7 @@ describe("Navbar", () => {
       document.body.appendChild(featuresSection);
       document.body.appendChild(productsSection);
 
-      render(<Navbar />);
+      renderNavbar();
 
       const desktopLinks = screen.getAllByText("Features");
       const featuresLink = desktopLinks.find((link) =>
@@ -279,7 +288,7 @@ describe("Navbar", () => {
     });
 
     it("cleans up IntersectionObserver on unmount", () => {
-      const { unmount } = render(<Navbar />);
+      const { unmount } = renderNavbar();
       unmount();
       expect(mockDisconnect).toHaveBeenCalled();
     });
@@ -287,7 +296,7 @@ describe("Navbar", () => {
 
   describe("Accessibility", () => {
     it("has proper ARIA labels on interactive elements", () => {
-      render(<Navbar />);
+      renderNavbar();
 
       const menuButton = screen.getByRole("button", { name: /toggle menu/i });
       expect(menuButton).toHaveAttribute("aria-label");
@@ -299,7 +308,7 @@ describe("Navbar", () => {
       section.id = "features";
       document.body.appendChild(section);
 
-      render(<Navbar />);
+      renderNavbar();
 
       let observerCallback: IntersectionObserverCallback = () => {};
       global.IntersectionObserver = vi.fn((callback) => {
@@ -316,8 +325,12 @@ describe("Navbar", () => {
       }) as any;
 
       // Trigger re-render to capture new observer
-      const { rerender } = render(<Navbar />);
-      rerender(<Navbar />);
+      const { rerender } = renderNavbar();
+      rerender(
+        <ThemeProvider>
+          <Navbar />
+        </ThemeProvider>,
+      );
 
       if (observerCallback) {
         observerCallback(
@@ -346,7 +359,7 @@ describe("Navbar", () => {
     });
 
     it("has semantic header and nav elements", () => {
-      render(<Navbar />);
+      renderNavbar();
       expect(screen.getByRole("banner")).toBeInTheDocument();
       expect(screen.getByRole("navigation")).toBeInTheDocument();
     });

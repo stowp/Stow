@@ -11,9 +11,9 @@ export interface PaginatedLockedPlans {
 }
 
 /**
- * Read access to the `locked_plans` projection (populated elsewhere from the
+ * Read/write access to the `locked_plans` projection, populated from the
  * vault contract's `locked_created`/`locked_top_up`/`locked_withdraw`
- * events).
+ * events (see `SavingsProjectionService`, which drives `upsertCreated`).
  */
 @Injectable()
 export class LockedPlansService {
@@ -21,6 +21,34 @@ export class LockedPlansService {
     @InjectRepository(LockedPlan)
     private readonly lockedPlanRepository: Repository<LockedPlan>,
   ) {}
+
+  /**
+   * Projects a `locked_created` event into the `locked_plans` table.
+   *
+   * Idempotent by `on_chain_id`: if a plan with this on-chain id already
+   * exists (e.g. the indexer redelivers the same event, or a checkpoint
+   * replay reprocesses it), the existing row is returned unchanged rather
+   * than inserting a duplicate.
+   */
+  async upsertCreated(params: {
+    onChainId: string;
+    owner: string;
+    balance: string;
+    unlockAt: Date;
+  }): Promise<LockedPlan> {
+    const existing = await this.lockedPlanRepository.findOne({
+      where: { on_chain_id: params.onChainId },
+    });
+    if (existing) return existing;
+
+    const plan = this.lockedPlanRepository.create({
+      on_chain_id: params.onChainId,
+      owner: params.owner,
+      balance: params.balance,
+      unlock_at: params.unlockAt,
+    });
+    return this.lockedPlanRepository.save(plan);
+  }
 
   /**
    * Lists an owner's locked plans, soonest-unlocking first, paginated.

@@ -79,7 +79,10 @@ fn flexible_deposit_withdraw() {
     let account = client.get_account(&owner);
     assert_eq!(account.owner, owner);
     assert_eq!(account.balance, amount);
-    assert_eq!(client.try_get_account(&Address::generate(&env)), Err(Ok(Error::NotFound)));
+    assert_eq!(
+        client.try_get_account(&Address::generate(&env)),
+        Err(Ok(Error::NotFound))
+    );
 }
 
 #[test]
@@ -196,7 +199,10 @@ fn goal_claim_after_reached_returns_funds() {
     client.goal_contribute(&owner, &goal_id, &TARGET);
 
     let goal = client.goal(&goal_id);
-    assert!(goal.reached_at.is_some(), "goal must be reached before claim");
+    assert!(
+        goal.reached_at.is_some(),
+        "goal must be reached before claim"
+    );
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
     let owner_balance_before_claim = token_client.balance(&owner);
@@ -597,8 +603,7 @@ fn locked_withdraw_still_locked_and_over_balance_prefers_insufficient_balance() 
 
     // Must be one of the two valid errors; must not succeed.
     assert!(
-        result == Err(Ok(Error::InsufficientBalance))
-            || result == Err(Ok(Error::StillLocked)),
+        result == Err(Ok(Error::InsufficientBalance)) || result == Err(Ok(Error::StillLocked)),
         "expected InsufficientBalance or StillLocked, got {:?}",
         result,
     );
@@ -823,8 +828,11 @@ fn goal_claim_by_non_owner_rejected() {
 
     mint(&env, &token, &token_admin, &owner, TARGET);
 
-    let goal_id = client
-        .goal_create(&owner, &soroban_sdk::String::from_str(&env, "holiday"), &TARGET);
+    let goal_id = client.goal_create(
+        &owner,
+        &soroban_sdk::String::from_str(&env, "holiday"),
+        &TARGET,
+    );
 
     // Owner contributes the full target so the goal is reached.
     client.goal_contribute(&owner, &goal_id, &TARGET);
@@ -856,8 +864,7 @@ fn group_close_by_non_creator_rejected() {
     let creator = Address::generate(&env);
     let non_creator = Address::generate(&env);
 
-    let group_id = client
-        .group_create(&creator, &soroban_sdk::String::from_str(&env, "pool-a"));
+    let group_id = client.group_create(&creator, &soroban_sdk::String::from_str(&env, "pool-a"));
 
     // Non-creator attempts to close the group.
     let result = client.try_group_close(&non_creator, &group_id);
@@ -870,7 +877,10 @@ fn group_close_by_non_creator_rejected() {
 
     // Group must still be open.
     let group = client.group(&group_id);
-    assert!(group.open, "group must remain open after rejected close attempt");
+    assert!(
+        group.open,
+        "group must remain open after rejected close attempt"
+    );
 }
 
 // --- Creator-only: group::set_shares ---------------------------------------
@@ -887,8 +897,7 @@ fn group_set_shares_by_non_creator_rejected() {
     let member = Address::generate(&env);
     let non_creator = Address::generate(&env);
 
-    let group_id = client
-        .group_create(&creator, &soroban_sdk::String::from_str(&env, "pool-b"));
+    let group_id = client.group_create(&creator, &soroban_sdk::String::from_str(&env, "pool-b"));
 
     // Add a second member so a valid 10 000-bps split can be constructed.
     client.group_join(&member, &group_id);
@@ -926,8 +935,7 @@ fn group_contribute_by_non_member_rejected() {
     const AMOUNT: i128 = 20_000_000; // 20 USDC
     mint(&env, &token, &token_admin, &outsider, AMOUNT);
 
-    let group_id = client
-        .group_create(&creator, &soroban_sdk::String::from_str(&env, "pool-c"));
+    let group_id = client.group_create(&creator, &soroban_sdk::String::from_str(&env, "pool-c"));
 
     // Outsider has never called group_join; must be rejected.
     let result = client.try_group_contribute(&outsider, &group_id, &AMOUNT);
@@ -1333,7 +1341,10 @@ fn deposit_beyond_cap_rejected() {
     );
 
     let account = client.get_account(&user);
-    assert_eq!(account.balance, CAP, "balance must not change on a rejected deposit");
+    assert_eq!(
+        account.balance, CAP,
+        "balance must not change on a rejected deposit"
+    );
 }
 
 /// Raising the cap takes effect immediately: a deposit that was rejected
@@ -1562,7 +1573,221 @@ fn withdraw_emits_typed_event_with_expected_topic_and_data() {
 
     assert_eq!(contract_id, client.address);
     assert_eq!(topics, expected_topics);
-    assert_eq!(decoded_data, (user, WITHDRAW_AMOUNT, remaining_balance, now));
+    assert_eq!(
+        decoded_data,
+        (user, WITHDRAW_AMOUNT, remaining_balance, now)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #28 / #29 — typed event publishers: locked_created, goal_reached,
+// group_created, group_split_settled.
+//
+// Each test asserts the exact topics and data tuple against the schema
+// documented in `contracts/savings-vault/README.md` ("Event schema"), not
+// just that *an* event was emitted — so a future accidental field
+// reordering or omission fails the test instead of silently drifting from
+// the documented (and indexer-relied-upon) shape.
+// ---------------------------------------------------------------------------
+
+/// `locked_create` emits a `locked_created` event with topics
+/// `(locked_created, owner, id)` and data `(id, owner, amount, unlock_at,
+/// timestamp)`.
+#[test]
+fn locked_create_emits_typed_event_with_expected_topic_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+
+    const AMOUNT: i128 = 20_000_000;
+    let unlock_at = env.ledger().timestamp() + 1_000;
+
+    mint(&env, &token, &token_admin, &owner, AMOUNT);
+
+    let plan_id = client.locked_create(&owner, &AMOUNT, &unlock_at);
+
+    let now = env.ledger().timestamp();
+    let events = env.events().all();
+    let (contract_id, topics, data) = events.last().unwrap().clone();
+
+    let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
+        (crate::events::TOPIC_LOCKED_CREATED, owner.clone(), plan_id).into_val(&env);
+    let decoded_data: (u64, Address, i128, u64, u64) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+
+    assert_eq!(contract_id, client.address);
+    assert_eq!(topics, expected_topics);
+    assert_eq!(decoded_data, (plan_id, owner, AMOUNT, unlock_at, now));
+}
+
+/// `goal_contribute` that first crosses the target emits a `goal_reached`
+/// event with topics `(goal_reached, owner, id)` and data `(id, owner,
+/// saved_amount, target_amount, timestamp)`.
+#[test]
+fn goal_reached_emits_typed_event_with_expected_topic_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+
+    const TARGET: i128 = 10_000_000;
+    const CONTRIBUTION: i128 = 10_000_000; // exactly meets the target
+
+    mint(&env, &token, &token_admin, &owner, CONTRIBUTION);
+
+    let goal_id = client.goal_create(&owner, &String::from_str(&env, "New laptop"), &TARGET);
+    client.goal_contribute(&owner, &goal_id, &CONTRIBUTION);
+
+    let now = env.ledger().timestamp();
+    let events = env.events().all();
+    // goal_contribute publishes goal_contribution then, in the same call,
+    // goal_reached — the reached event is the last one emitted.
+    let (contract_id, topics, data) = events.last().unwrap().clone();
+
+    let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
+        (crate::events::TOPIC_GOAL_REACHED, owner.clone(), goal_id).into_val(&env);
+    let decoded_data: (u64, Address, i128, i128, u64) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+
+    assert_eq!(contract_id, client.address);
+    assert_eq!(topics, expected_topics);
+    assert_eq!(decoded_data, (goal_id, owner, CONTRIBUTION, TARGET, now));
+}
+
+/// `group_create` emits a `group_created` event with topics
+/// `(group_created, creator, id)` and data `(id, creator, name,
+/// timestamp)`.
+#[test]
+fn group_create_emits_typed_event_with_expected_topic_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, _token) = setup_with_token(&env);
+    let creator = Address::generate(&env);
+    let name = String::from_str(&env, "Vacation fund");
+
+    let group_id = client.group_create(&creator, &name);
+
+    let now = env.ledger().timestamp();
+    let events = env.events().all();
+    let (contract_id, topics, data) = events.last().unwrap().clone();
+
+    let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
+        crate::events::TOPIC_GROUP_CREATED,
+        creator.clone(),
+        group_id,
+    )
+        .into_val(&env);
+    let decoded_data: (u64, Address, String, u64) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+
+    assert_eq!(contract_id, client.address);
+    assert_eq!(topics, expected_topics);
+    assert_eq!(decoded_data, (group_id, creator, name, now));
+}
+
+/// `group_settle` emits one `group_split_settled` event per member with
+/// topics `(group_split_settled, member, id)` and data `(id, member,
+/// amount, timestamp)`.
+#[test]
+fn group_settle_emits_typed_events_with_expected_topic_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let member_b = Address::generate(&env);
+
+    const CREATOR_CONTRIB: i128 = 60_000_000;
+    const MEMBER_B_CONTRIB: i128 = 40_000_000;
+    const TOTAL: i128 = CREATOR_CONTRIB + MEMBER_B_CONTRIB;
+
+    mint(&env, &token, &token_admin, &creator, CREATOR_CONTRIB);
+    mint(&env, &token, &token_admin, &member_b, MEMBER_B_CONTRIB);
+
+    let group_id = client.group_create(&creator, &String::from_str(&env, "typed-event-split"));
+    client.group_join(&member_b, &group_id);
+    client.group_contribute(&creator, &group_id, &CREATOR_CONTRIB);
+    client.group_contribute(&member_b, &group_id, &MEMBER_B_CONTRIB);
+    client.group_close(&creator, &group_id);
+
+    let mut shares = Map::new(&env);
+    shares.set(creator.clone(), 6_000u32);
+    shares.set(member_b.clone(), 4_000u32);
+    client.group_set_shares(&creator, &group_id, &shares);
+
+    // Snapshot the event count right before settle so this test only
+    // asserts on events `group_settle` itself emits — group_create,
+    // group_join, group_contribute (x2), and group_set_shares all emit
+    // their own events earlier in this setup.
+    let events_before_settle = env.events().all().len();
+
+    client.group_settle(&creator, &group_id);
+
+    let now = env.ledger().timestamp();
+    let member_b_payout = TOTAL * 4_000 / group_split::TOTAL_BPS as i128;
+    let creator_payout = TOTAL - member_b_payout; // first member absorbs the rounding remainder
+
+    let events = env.events().all();
+    // `settle` also triggers a `transfer` event per member from the token
+    // contract itself (a side effect of `token_client.transfer`), which is
+    // interleaved with the vault's own `group_split_settled` events — so
+    // filter by topic rather than assuming the vault's events are
+    // contiguous or positionally first.
+    let expected_creator_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
+        crate::events::TOPIC_GROUP_SPLIT_SETTLED,
+        creator.clone(),
+        group_id,
+    )
+        .into_val(&env);
+    let expected_member_b_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
+        crate::events::TOPIC_GROUP_SPLIT_SETTLED,
+        member_b.clone(),
+        group_id,
+    )
+        .into_val(&env);
+
+    let mut settled_events: soroban_sdk::Vec<(
+        Address,
+        soroban_sdk::Vec<soroban_sdk::Val>,
+        soroban_sdk::Val,
+    )> = soroban_sdk::Vec::new(&env);
+    for i in events_before_settle..events.len() {
+        let (contract_id, topics, data) = events.get(i).unwrap();
+        if topics == expected_creator_topics || topics == expected_member_b_topics {
+            settled_events.push_back((contract_id, topics, data));
+        }
+    }
+
+    assert_eq!(
+        settled_events.len(),
+        2,
+        "group_settle must emit exactly 2 group_split_settled events (one per member)"
+    );
+
+    let (creator_contract_id, _, creator_data) = settled_events.get(0).unwrap();
+    let decoded_creator_data: (u64, Address, i128, u64) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &creator_data).unwrap();
+    assert_eq!(creator_contract_id, client.address);
+    assert_eq!(
+        decoded_creator_data,
+        (group_id, creator, creator_payout, now)
+    );
+
+    let (member_b_contract_id, _, member_b_data) = settled_events.get(1).unwrap();
+    let decoded_member_b_data: (u64, Address, i128, u64) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &member_b_data).unwrap();
+    assert_eq!(member_b_contract_id, client.address);
+    assert_eq!(
+        decoded_member_b_data,
+        (group_id, member_b, member_b_payout, now)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1585,7 +1810,10 @@ fn paused_blocks_writes_and_admin_can_unpause() {
     let creator = Address::generate(&env);
 
     client.set_paused(&admin, &true);
-    assert!(client.is_paused(), "vault must report paused after set_paused(true)");
+    assert!(
+        client.is_paused(),
+        "vault must report paused after set_paused(true)"
+    );
 
     let result = client.try_group_create(&creator, &soroban_sdk::String::from_str(&env, "pool"));
     assert_eq!(
@@ -1598,11 +1826,17 @@ fn paused_blocks_writes_and_admin_can_unpause() {
     assert_eq!(client.admin(), admin);
 
     client.set_paused(&admin, &false);
-    assert!(!client.is_paused(), "vault must report unpaused after set_paused(false)");
+    assert!(
+        !client.is_paused(),
+        "vault must report unpaused after set_paused(false)"
+    );
 
     let group_id = client.group_create(&creator, &soroban_sdk::String::from_str(&env, "pool"));
     let group = client.group(&group_id);
-    assert_eq!(group.creator, creator, "group_create must succeed once unpaused");
+    assert_eq!(
+        group.creator, creator,
+        "group_create must succeed once unpaused"
+    );
 }
 
 /// Only the admin may pause/unpause the vault.
@@ -1620,7 +1854,10 @@ fn set_paused_by_non_admin_rejected() {
         Err(Ok(Error::Unauthorized)),
         "non-admin must not be able to pause the vault",
     );
-    assert!(!client.is_paused(), "vault must remain unpaused after a rejected pause attempt");
+    assert!(
+        !client.is_paused(),
+        "vault must remain unpaused after a rejected pause attempt"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1751,7 +1988,10 @@ mod group_split_properties {
     /// member absorbs whatever rounding remainder is needed so the shares
     /// sum to exactly `TOTAL_BPS` (a precondition `set_shares` enforces
     /// on-chain).
-    fn shares_from_weights(env: &Env, weights: &[u32]) -> (soroban_sdk::Vec<Address>, Map<Address, u32>) {
+    fn shares_from_weights(
+        env: &Env,
+        weights: &[u32],
+    ) -> (soroban_sdk::Vec<Address>, Map<Address, u32>) {
         let mut addrs: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(env);
         for _ in weights {
             addrs.push_back(Address::generate(env));
