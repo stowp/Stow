@@ -4,7 +4,9 @@ use soroban_sdk::{token, Address, Env, Map, String, Vec};
 
 use crate::admin::require_not_paused;
 use crate::error::Error;
-use crate::events::{TOPIC_GROUP_CLOSED, TOPIC_GROUP_CONTRIBUTION, TOPIC_GROUP_CREATED, TOPIC_GROUP_PAYOUT};
+use crate::events::{
+    TOPIC_GROUP_CLOSED, TOPIC_GROUP_CONTRIBUTION, TOPIC_GROUP_CREATED, TOPIC_GROUP_PAYOUT,
+};
 use crate::storage::extend_instance_ttl;
 use crate::types::{DataKey, Group};
 
@@ -24,6 +26,7 @@ pub fn create(env: &Env, creator: Address, name: String) -> Result<u64, Error> {
     members.push_back(creator.clone());
 
     // Create the group with open = true and zero balance
+    let now = env.ledger().timestamp();
     let group = Group {
         id,
         creator: creator.clone(),
@@ -32,17 +35,19 @@ pub fn create(env: &Env, creator: Address, name: String) -> Result<u64, Error> {
         balance: 0,
         shares_bps: Map::new(env),
         open: true,
-        created_at: env.ledger().timestamp(),
+        created_at: now,
     };
 
     // Store the group
-    env.storage()
-        .persistent()
-        .set(&DataKey::Group(id), &group);
+    env.storage().persistent().set(&DataKey::Group(id), &group);
 
-    // Emit group-created event
-    env.events()
-        .publish((TOPIC_GROUP_CREATED,), (id, creator, name));
+    // Emit group-created event: topics carry (creator, id) so indexers can
+    // filter server-side without decoding data, per the event schema in
+    // contracts/savings-vault/README.md.
+    env.events().publish(
+        (TOPIC_GROUP_CREATED, creator.clone(), id),
+        (id, creator, name, now),
+    );
 
     Ok(id)
 }
@@ -69,7 +74,7 @@ pub fn join(env: &Env, member: Address, group_id: u64) -> Result<(), Error> {
 
     // Check if member is already in the group (idempotent)
     let already_member = group.members.iter().any(|m| m == member);
-    
+
     if !already_member {
         // Add member to the group
         group.members.push_back(member.clone());
@@ -119,7 +124,7 @@ pub fn contribute(env: &Env, member: Address, group_id: u64, amount: i128) -> Re
         .instance()
         .get(&DataKey::Token)
         .ok_or(Error::NotInitialized)?;
-    
+
     let token_client = token::Client::new(env, &token_address);
     token_client.transfer(&member, &env.current_contract_address(), &amount);
 
@@ -214,14 +219,14 @@ pub fn payout_equal(env: &Env, caller: Address, group_id: u64) -> Result<(), Err
         .instance()
         .get(&DataKey::Token)
         .ok_or(Error::NotInitialized)?;
-    
+
     let token_client = token::Client::new(env, &token_address);
     let contract_address = env.current_contract_address();
 
     // Transfer to each member
     for (index, member) in group.members.iter().enumerate() {
         let mut payout_amount = share_per_member;
-        
+
         // Assign remainder to the first member (creator) deterministically
         if index == 0 && remainder > 0 {
             payout_amount += remainder;
@@ -232,8 +237,10 @@ pub fn payout_equal(env: &Env, caller: Address, group_id: u64) -> Result<(), Err
         token_client.transfer(&contract_address, &member, &payout_amount);
 
         // Emit payout event for each member
-        env.events()
-            .publish((TOPIC_GROUP_PAYOUT,), (group_id, member.clone(), payout_amount));
+        env.events().publish(
+            (TOPIC_GROUP_PAYOUT,),
+            (group_id, member.clone(), payout_amount),
+        );
     }
 
     // Zero the pool balance

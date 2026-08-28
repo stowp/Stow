@@ -27,7 +27,7 @@ pub fn create(env: &Env, owner: Address, name: String, target_amount: i128) -> R
     let goal = Goal {
         id,
         owner: owner.clone(),
-        name,
+        name: name.clone(),
         target_amount,
         saved_amount: 0,
         created_at: now,
@@ -35,8 +35,10 @@ pub fn create(env: &Env, owner: Address, name: String, target_amount: i128) -> R
     };
     env.storage().persistent().set(&DataKey::Goal(id), &goal);
 
-    env.events()
-        .publish((TOPIC_GOAL_CREATED, owner, id), (id, target_amount, now));
+    env.events().publish(
+        (TOPIC_GOAL_CREATED, owner.clone(), id),
+        (id, owner, name, target_amount, now),
+    );
 
     Ok(id)
 }
@@ -52,14 +54,21 @@ pub fn contribute(env: &Env, from: Address, goal_id: u64, amount: i128) -> Resul
     }
 
     let key = DataKey::Goal(goal_id);
-    let mut goal: Goal = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut goal: Goal = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
 
     let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
     let token_client = token::Client::new(env, &token_address);
     token_client.transfer(&from, &env.current_contract_address(), &amount);
 
     let was_reached = goal.reached_at.is_some();
-    let new_saved = goal.saved_amount.checked_add(amount).ok_or(Error::Overflow)?;
+    let new_saved = goal
+        .saved_amount
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
     goal.saved_amount = new_saved;
 
     let now = env.ledger().timestamp();
@@ -72,7 +81,13 @@ pub fn contribute(env: &Env, from: Address, goal_id: u64, amount: i128) -> Resul
         goal.reached_at = Some(now);
         env.events().publish(
             (TOPIC_GOAL_REACHED, goal.owner.clone(), goal_id),
-            (goal_id, goal.owner.clone(), new_saved, now),
+            (
+                goal_id,
+                goal.owner.clone(),
+                new_saved,
+                goal.target_amount,
+                now,
+            ),
         );
     }
 
@@ -89,7 +104,11 @@ pub fn claim(env: &Env, owner: Address, goal_id: u64) -> Result<(), Error> {
     owner.require_auth();
 
     let key = DataKey::Goal(goal_id);
-    let goal: Goal = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let goal: Goal = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
 
     if goal.owner != owner {
         return Err(Error::Unauthorized);
