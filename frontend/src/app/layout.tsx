@@ -33,6 +33,16 @@ export const metadata: Metadata = {
       "Non-custodial, transparent savings in USDC — flexible, locked, goal-based, and group savings enforced on-chain.",
     type: "website",
   },
+  icons: {
+    icon: [
+      // Browsers that support prefers-color-scheme-aware favicons (most
+      // current Chromium/Firefox/Safari) pick whichever matches the OS
+      // theme; browsers that don't fall back to the first entry, which is
+      // also served automatically via the app/favicon.ico convention.
+      { url: "/icon-light.svg", media: "(prefers-color-scheme: light)" },
+      { url: "/icon-dark.svg", media: "(prefers-color-scheme: dark)" },
+    ],
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
