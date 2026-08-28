@@ -2,13 +2,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { GoalsService } from '../goals/goals.service';
 import { BalanceService } from '../savings/balance.service';
 import { GroupsService } from '../savings/groups.service';
+import { LockedPlansService } from '../savings/locked-plans.service';
 import { NotificationGeneratorService } from '../notifications/notification-generator.service';
 
 /**
  * Applies a single savings-vault contract event to the off-chain
- * projections (goals, balances, groups). Shared by the indexer's
- * event-store pipeline and the Soroban listener's live poll loop so both
- * dispatch on `topic[0]` the same way.
+ * projections (goals, balances, groups, locked plans). Shared by the
+ * indexer's event-store pipeline and the Soroban listener's live poll loop
+ * so both dispatch on `topic[0]` the same way.
  *
  * Every handler here is idempotent on its own terms (upsert-by-on-chain-id,
  * or a status/settled flag guarding the state change); callers are
@@ -23,6 +24,7 @@ export class SavingsProjectionService {
     private readonly goalsService: GoalsService,
     private readonly balanceService: BalanceService,
     private readonly groupsService: GroupsService,
+    private readonly lockedPlansService: LockedPlansService,
     private readonly notificationGeneratorService: NotificationGeneratorService,
   ) {}
 
@@ -51,6 +53,16 @@ export class SavingsProjectionService {
 
       case 'goal_reached': {
         await this.markGoalReachedAndNotify(String(data.id ?? data.goal_id));
+        break;
+      }
+
+      case 'locked_created': {
+        await this.lockedPlansService.upsertCreated({
+          onChainId: String(data.id ?? data.plan_id),
+          owner: String(data.owner),
+          balance: String(data.amount),
+          unlockAt: this.toDate(data.unlock_at),
+        });
         break;
       }
 
@@ -85,5 +97,17 @@ export class SavingsProjectionService {
       name: goal.name,
       targetAmount: goal.target_amount,
     });
+  }
+
+  /**
+   * Converts a contract event's `unlock_at` field — a Soroban `u64` ledger
+   * timestamp in whole seconds since the Unix epoch, decoded as a JS
+   * `number`, `string`, or `bigint` depending on the XDR normalization step
+   * upstream — into a `Date` for the `locked_plans` projection.
+   */
+  private toDate(value: unknown): Date {
+    const seconds =
+      typeof value === 'bigint' ? Number(value) : Number(value ?? 0);
+    return new Date(seconds * 1000);
   }
 }
