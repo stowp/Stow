@@ -248,4 +248,61 @@ describe('LockedPlansService', () => {
     const result = await service.listByOwner('GNOBODY');
     expect(result).toEqual({ data: [], total: 0, page: 1, limit: 20 });
   });
+
+  it('defaults to soonest-unlocking-first (unlock_at ASC) when sort is omitted', async () => {
+    repository.seed([
+      makePlan({
+        on_chain_id: 'p1',
+        owner: 'GOWNER',
+        unlock_at: new Date('2030-06-01'),
+      }),
+      makePlan({
+        on_chain_id: 'p2',
+        owner: 'GOWNER',
+        unlock_at: new Date('2030-01-01'),
+      }),
+    ]);
+
+    const result = await service.listByOwner('GOWNER');
+
+    expect(result.data.map((p) => p.on_chain_id)).toEqual(['p2', 'p1']);
+  });
+
+  it('reverses to latest-unlocking-first when sort="desc"', async () => {
+    repository.seed([
+      makePlan({
+        on_chain_id: 'p1',
+        owner: 'GOWNER',
+        unlock_at: new Date('2030-06-01'),
+      }),
+      makePlan({
+        on_chain_id: 'p2',
+        owner: 'GOWNER',
+        unlock_at: new Date('2030-01-01'),
+      }),
+    ]);
+
+    const result = await service.listByOwner('GOWNER', 1, 20, 'desc');
+
+    expect(result.data.map((p) => p.on_chain_id)).toEqual(['p1', 'p2']);
+  });
+
+  it('explicit sort="asc" matches the default', async () => {
+    repository.seed([
+      makePlan({
+        on_chain_id: 'p1',
+        owner: 'GOWNER',
+        unlock_at: new Date('2030-06-01'),
+      }),
+      makePlan({
+        on_chain_id: 'p2',
+        owner: 'GOWNER',
+        unlock_at: new Date('2030-01-01'),
+      }),
+    ]);
+
+    const result = await service.listByOwner('GOWNER', 1, 20, 'asc');
+
+    expect(result.data.map((p) => p.on_chain_id)).toEqual(['p2', 'p1']);
+  });
 });

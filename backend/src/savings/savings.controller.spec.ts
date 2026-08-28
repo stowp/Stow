@@ -39,52 +39,132 @@ describe('SavingsController', () => {
   describe('listGoals', () => {
     it('shapes the paginated service result into ListGoalsDto', async () => {
       goalsService.listByOwnerPaginated.mockResolvedValue({
-        data: [{ on_chain_id: 'g1', owner: 'GADDR', name: 'Trip', target_amount: '100', current_amount: '40', status: 'active' }],
+        data: [
+          {
+            on_chain_id: 'g1',
+            owner: 'GADDR',
+            name: 'Trip',
+            target_amount: '100',
+            current_amount: '40',
+            status: 'active',
+          },
+        ],
         total: 1,
         page: 1,
         limit: 20,
       });
 
-      const result = await controller.listGoals('GADDR', 1, 20);
+      const result = await controller.listGoals('GADDR', {
+        page: 1,
+        limit: 20,
+      });
 
-      expect(goalsService.listByOwnerPaginated).toHaveBeenCalledWith('GADDR', 1, 20);
+      expect(goalsService.listByOwnerPaginated).toHaveBeenCalledWith(
+        'GADDR',
+        1,
+        20,
+        undefined,
+      );
       expect(result).toEqual({
         address: 'GADDR',
-        goals: [{ on_chain_id: 'g1', owner: 'GADDR', name: 'Trip', target_amount: '100', current_amount: '40', status: 'active' }],
+        goals: [
+          {
+            on_chain_id: 'g1',
+            owner: 'GADDR',
+            name: 'Trip',
+            target_amount: '100',
+            current_amount: '40',
+            status: 'active',
+          },
+        ],
         total: 1,
         page: 1,
         limit: 20,
       });
     });
 
-    it('coerces string query params to numbers before calling the service', async () => {
-      goalsService.listByOwnerPaginated.mockResolvedValue({ data: [], total: 0, page: 2, limit: 5 });
+    it('passes page/limit/sort straight through — SavingsListQueryDto already coerced and validated them', async () => {
+      goalsService.listByOwnerPaginated.mockResolvedValue({
+        data: [],
+        total: 0,
+        page: 2,
+        limit: 5,
+      });
 
-      await controller.listGoals('GADDR', '2' as unknown as number, '5' as unknown as number);
+      await controller.listGoals('GADDR', { page: 2, limit: 5, sort: 'asc' });
 
-      expect(goalsService.listByOwnerPaginated).toHaveBeenCalledWith('GADDR', 2, 5);
+      expect(goalsService.listByOwnerPaginated).toHaveBeenCalledWith(
+        'GADDR',
+        2,
+        5,
+        'asc',
+      );
     });
   });
 
   describe('listLocked', () => {
     it('shapes the paginated service result into ListLockedDto', async () => {
       lockedPlansService.listByOwner.mockResolvedValue({
-        data: [{ on_chain_id: 'p1', owner: 'GADDR', balance: '500', unlock_at: new Date('2030-01-01') }],
+        data: [
+          {
+            on_chain_id: 'p1',
+            owner: 'GADDR',
+            balance: '500',
+            unlock_at: new Date('2030-01-01'),
+          },
+        ],
         total: 1,
         page: 1,
         limit: 20,
       });
 
-      const result = await controller.listLocked('GADDR', 1, 20);
+      const result = await controller.listLocked('GADDR', {
+        page: 1,
+        limit: 20,
+      });
 
-      expect(lockedPlansService.listByOwner).toHaveBeenCalledWith('GADDR', 1, 20);
+      expect(lockedPlansService.listByOwner).toHaveBeenCalledWith(
+        'GADDR',
+        1,
+        20,
+        undefined,
+      );
       expect(result).toEqual({
         address: 'GADDR',
-        plans: [{ on_chain_id: 'p1', owner: 'GADDR', balance: '500', unlock_at: new Date('2030-01-01') }],
+        plans: [
+          {
+            on_chain_id: 'p1',
+            owner: 'GADDR',
+            balance: '500',
+            unlock_at: new Date('2030-01-01'),
+          },
+        ],
         total: 1,
         page: 1,
         limit: 20,
       });
+    });
+
+    it('passes sort=desc straight through to the service', async () => {
+      lockedPlansService.listByOwner.mockResolvedValue({
+        data: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+      });
+
+      await controller.listLocked('GADDR', {
+        page: 1,
+        limit: 20,
+        sort: 'desc',
+      });
+
+      expect(lockedPlansService.listByOwner).toHaveBeenCalledWith(
+        'GADDR',
+        1,
+        20,
+        'desc',
+      );
     });
   });
 
