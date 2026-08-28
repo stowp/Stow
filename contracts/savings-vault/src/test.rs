@@ -398,6 +398,72 @@ fn flexible_withdraw_exact_balance_succeeds() {
     );
 }
 
+/// Flexible deposit/withdraw round-trip (issue #34).
+///
+/// Funds a user via the mock token, deposits, partially withdraws, asserts
+/// the balance at each step, then confirms an over-withdrawal against the
+/// remaining balance is rejected and leaves that balance untouched. The
+/// existing `flexible_withdraw_over_balance_rejected` /
+/// `flexible_withdraw_exact_balance_succeeds` tests each isolate a single
+/// step; this test exercises the full sequence in one flow, including the
+/// partial-withdrawal-then-over-withdraw case neither of those cover.
+#[test]
+fn flexible_deposit_withdraw_round_trip() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    const DEPOSIT: i128 = 100_000_000; // 100 USDC
+    const PARTIAL_WITHDRAW: i128 = 40_000_000; // 40 USDC
+    const REMAINING: i128 = DEPOSIT - PARTIAL_WITHDRAW; // 60 USDC
+
+    // Fund the user's wallet so deposit's token transfer_in can succeed.
+    mint(&env, &token, &token_admin, &user, DEPOSIT);
+
+    // Deposit the full amount; balance must reflect exactly what was deposited.
+    client.deposit(&user, &DEPOSIT);
+    let account = client.get_account(&user);
+    assert_eq!(
+        account.balance, DEPOSIT,
+        "balance must equal the deposited amount",
+    );
+
+    // Partially withdraw; balance must reflect exactly what remains.
+    client.withdraw(&user, &PARTIAL_WITHDRAW);
+    let account = client.get_account(&user);
+    assert_eq!(
+        account.balance, REMAINING,
+        "balance must be deposit minus the partial withdrawal",
+    );
+
+    // Attempting to withdraw more than the remaining balance must be
+    // rejected, and must not change the balance.
+    let result = client.try_withdraw(&user, &(REMAINING + 1));
+    assert_eq!(
+        result,
+        Err(Ok(Error::InsufficientBalance)),
+        "expected InsufficientBalance when withdrawing {} from a remaining balance of {}",
+        REMAINING + 1,
+        REMAINING,
+    );
+    let account = client.get_account(&user);
+    assert_eq!(
+        account.balance, REMAINING,
+        "balance must be unchanged after a rejected over-withdrawal",
+    );
+
+    // Withdraw exactly what remains; balance must be zero.
+    client.withdraw(&user, &REMAINING);
+    let account = client.get_account(&user);
+    assert_eq!(
+        account.balance, 0,
+        "balance must be zero after withdrawing the full remaining amount",
+    );
+}
+
 /// Locked over-withdrawal: once past the unlock time, attempting to withdraw
 /// more than the locked plan balance must return `Error::InsufficientBalance`.
 #[test]
