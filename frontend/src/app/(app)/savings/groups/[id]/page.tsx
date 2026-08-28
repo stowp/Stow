@@ -4,11 +4,7 @@ import { useEffect, useState } from "react";
 import { Users } from "lucide-react";
 import { useGroupDetail } from "@/hooks/useGroupDetail";
 import ErrorRetry from "@/components/ui/ErrorRetry";
-
-function formatStroops(stroops: string): string {
-  const value = Number(stroops) / 10_000_000;
-  return value.toLocaleString(undefined, { maximumFractionDigits: 7 });
-}
+import { formatStroopsAmount } from "@/lib/currency";
 
 export default function GroupDetailPage({
   params,
@@ -96,7 +92,7 @@ export default function GroupDetailPage({
         <div className="rounded-2xl border border-border bg-card p-6 mb-6">
           <p className="text-sm text-muted mb-1">Pooled balance</p>
           <p className="text-2xl font-semibold text-foreground">
-            {formatStroops(group.balance)} XLM
+            {formatStroopsAmount(group.balance)} XLM
           </p>
         </div>
 
@@ -117,7 +113,7 @@ export default function GroupDetailPage({
                     {member.address}
                   </span>
                   <span className="text-sm text-muted">
-                    {formatStroops(member.contributed)} XLM
+                    {formatStroopsAmount(member.contributed)} XLM
                   </span>
                 </li>
               ))}
