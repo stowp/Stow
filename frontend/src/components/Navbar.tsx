@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Menu, X } from "lucide-react";
 import GithubIcon from "@/components/GithubIcon";
+import ThemeToggle from "@/components/ThemeToggle";
 
 const links = [
   { label: "Features", href: "#features" },
@@ -76,6 +77,7 @@ export default function Navbar() {
         </div>
 
         <div className="hidden items-center gap-3 md:flex">
+          <ThemeToggle />
           <a
             href="https://github.com/stowp/Stow"
             className="flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm text-muted transition-colors hover:border-brand/40 hover:text-foreground"
@@ -90,14 +92,17 @@ export default function Navbar() {
           </a>
         </div>
 
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="grid h-10 w-10 place-items-center rounded-lg border border-border text-foreground md:hidden"
-          aria-label="Toggle menu"
-          aria-expanded={open}
-        >
-          {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-        </button>
+        <div className="flex items-center gap-2 md:hidden">
+          <ThemeToggle />
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="grid h-10 w-10 place-items-center rounded-lg border border-border text-foreground"
+            aria-label="Toggle menu"
+            aria-expanded={open}
+          >
+            {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+        </div>
       </nav>
 
       {open && (
