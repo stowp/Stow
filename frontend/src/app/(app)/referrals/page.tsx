@@ -80,9 +80,9 @@ export default function ReferralsPage() {
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto max-w-2xl">
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <Gift className="h-8 w-8 text-brand" />
-            <h1 className="text-3xl font-semibold text-foreground">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
+            <Gift className="h-7 w-7 sm:h-8 sm:w-8 text-brand shrink-0" />
+            <h1 className="text-2xl sm:text-3xl font-semibold text-foreground">
               Referrals
             </h1>
           </div>
@@ -117,7 +117,7 @@ export default function ReferralsPage() {
                     type="text"
                     readOnly
                     value={referralLink}
-                    className="w-full select-all rounded-xl border border-border bg-background px-4 py-3 font-mono text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-brand/50"
+                    className="w-full min-w-0 select-all rounded-xl border border-border bg-background px-4 py-3 font-mono text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-brand/50 overflow-hidden text-ellipsis"
                   />
                   <button
                     type="button"
@@ -140,20 +140,20 @@ export default function ReferralsPage() {
               </div>
 
               <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-2xl border border-border bg-card p-4 text-center">
-                  <p className="text-2xl font-semibold text-foreground">
+                <div className="rounded-2xl border border-border bg-card p-3 sm:p-4 text-center">
+                  <p className="text-xl sm:text-2xl font-semibold text-foreground">
                     {data.total}
                   </p>
                   <p className="text-xs text-muted mt-1">Total</p>
                 </div>
-                <div className="rounded-2xl border border-border bg-card p-4 text-center">
-                  <p className="text-2xl font-semibold text-yellow-400">
+                <div className="rounded-2xl border border-border bg-card p-3 sm:p-4 text-center">
+                  <p className="text-xl sm:text-2xl font-semibold text-yellow-400">
                     {data.pending}
                   </p>
                   <p className="text-xs text-muted mt-1">Pending</p>
                 </div>
-                <div className="rounded-2xl border border-border bg-card p-4 text-center">
-                  <p className="text-2xl font-semibold text-brand">
+                <div className="rounded-2xl border border-border bg-card p-3 sm:p-4 text-center">
+                  <p className="text-xl sm:text-2xl font-semibold text-brand">
                     {data.qualified}
                   </p>
                   <p className="text-xs text-muted mt-1">Qualified</p>
@@ -175,10 +175,10 @@ export default function ReferralsPage() {
                     {data.referrals.map((referral) => (
                       <div
                         key={referral.id}
-                        className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card px-4 py-3"
+                        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-xl border border-border bg-card px-4 py-3"
                       >
-                        <div>
-                          <p className="text-sm font-medium text-foreground">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-foreground truncate">
                             {referral.referred_username ??
                               referral.referred_stellar_address}
                           </p>
@@ -187,7 +187,9 @@ export default function ReferralsPage() {
                             {new Date(referral.created_at).toLocaleDateString()}
                           </p>
                         </div>
-                        <StatusBadge status={referral.status} />
+                        <div className="sm:ml-4">
+                          <StatusBadge status={referral.status} />
+                        </div>
                       </div>
                     ))}
                   </div>

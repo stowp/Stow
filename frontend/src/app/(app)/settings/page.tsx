@@ -155,9 +155,9 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto max-w-2xl">
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <Settings className="h-8 w-8 text-brand" />
-            <h1 className="text-3xl font-semibold text-foreground">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
+            <Settings className="h-7 w-7 sm:h-8 sm:w-8 text-brand shrink-0" />
+            <h1 className="text-2xl sm:text-3xl font-semibold text-foreground">
               Notification Settings
             </h1>
           </div>
@@ -194,9 +194,9 @@ export default function SettingsPage() {
                 {notificationCategories.map((category) => (
                   <div
                     key={category.id}
-                    className="flex items-start justify-between py-3 border-b border-border last:border-b-0"
+                    className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 py-3 border-b border-border last:border-b-0"
                   >
-                    <div className="flex-1 mr-4">
+                    <div className="flex-1 min-w-0">
                       <h3 className="text-sm font-medium text-foreground mb-1">
                         {category.label}
                       </h3>
@@ -211,29 +211,27 @@ export default function SettingsPage() {
                         )
                       }
                       disabled={isSaving}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand/50 disabled:opacity-50 ${
-                        preferences[
-                          category.id as keyof NotificationPreferences
-                        ]
-                          ? "bg-brand"
-                          : "bg-border"
-                      }`}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand/50 disabled:opacity-50 shrink-0 ${preferences[
+                        category.id as keyof NotificationPreferences
+                      ]
+                        ? "bg-brand"
+                        : "bg-border"
+                        }`}
                       role="switch"
                       aria-checked={
                         preferences[
-                          category.id as keyof NotificationPreferences
+                        category.id as keyof NotificationPreferences
                         ] as boolean
                       }
                       aria-label={`Toggle ${category.label}`}
                     >
                       <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          preferences[
-                            category.id as keyof NotificationPreferences
-                          ]
-                            ? "translate-x-6"
-                            : "translate-x-1"
-                        }`}
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${preferences[
+                          category.id as keyof NotificationPreferences
+                        ]
+                          ? "translate-x-6"
+                          : "translate-x-1"
+                          }`}
                       />
                     </button>
                   </div>
@@ -248,8 +246,8 @@ export default function SettingsPage() {
                 Quiet Hours
               </h2>
               <div className="space-y-4">
-                <div className="flex items-center justify-between py-3 border-b border-border">
-                  <div className="flex-1 mr-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-3 border-b border-border">
+                  <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-foreground mb-1">
                       Enable Quiet Hours
                     </h3>
@@ -260,25 +258,23 @@ export default function SettingsPage() {
                   <button
                     onClick={() => handleToggle("quietHoursEnabled")}
                     disabled={isSaving}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand/50 disabled:opacity-50 ${
-                      preferences.quietHoursEnabled ? "bg-brand" : "bg-border"
-                    }`}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand/50 disabled:opacity-50 shrink-0 ${preferences.quietHoursEnabled ? "bg-brand" : "bg-border"
+                      }`}
                     role="switch"
                     aria-checked={preferences.quietHoursEnabled}
                     aria-label="Toggle quiet hours"
                   >
                     <span
-                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                        preferences.quietHoursEnabled
-                          ? "translate-x-6"
-                          : "translate-x-1"
-                      }`}
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${preferences.quietHoursEnabled
+                        ? "translate-x-6"
+                        : "translate-x-1"
+                        }`}
                     />
                   </button>
                 </div>
 
                 {preferences.quietHoursEnabled && (
-                  <div className="grid grid-cols-2 gap-4 pt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                     <div>
                       <label
                         htmlFor="quietHoursStart"

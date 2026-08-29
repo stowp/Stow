@@ -140,18 +140,17 @@ export default function GoalDetailPage({
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto max-w-2xl">
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <Target className="h-8 w-8 text-brand" />
-            <h1 className="text-3xl font-semibold text-foreground">{goal.name}</h1>
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
+            <Target className="h-7 w-7 sm:h-8 sm:w-8 text-brand shrink-0" />
+            <h1 className="text-2xl sm:text-3xl font-semibold text-foreground break-words">{goal.name}</h1>
           </div>
           <span
-            className={`inline-block rounded-full px-3 py-1 text-xs font-medium ${
-              goal.status === "claimed"
-                ? "bg-muted/20 text-muted"
-                : goal.status === "reached"
-                  ? "bg-brand/10 text-brand"
-                  : "bg-muted/10 text-foreground"
-            }`}
+            className={`inline-block rounded-full px-3 py-1 text-xs font-medium ${goal.status === "claimed"
+              ? "bg-muted/20 text-muted"
+              : goal.status === "reached"
+                ? "bg-brand/10 text-brand"
+                : "bg-muted/10 text-foreground"
+              }`}
           >
             {goal.status === "claimed"
               ? "Claimed"
@@ -193,7 +192,7 @@ export default function GoalDetailPage({
               <p className="text-sm text-foreground">
                 Claim {formatStroopsAmount(goal.current_amount)} XLM from this goal?
               </p>
-              <div className="flex gap-3">
+              <div className="flex flex-col sm:flex-row gap-3">
                 <button
                   type="button"
                   onClick={handleConfirmClaim}
