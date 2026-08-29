@@ -8,7 +8,7 @@ import {
 
 /**
  * Per-account savings balance projected from the vault contract's `deposit`
- * (and future `withdraw`) events.
+ * and `withdraw` events.
  */
 @Entity('balances')
 export class Balance {

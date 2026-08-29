@@ -1,6 +1,7 @@
 /**
- * @jest-environment jsdom
+ * @vitest-environment jsdom
  */
+import { vi } from "vitest";
 import {
   isPageViewPingEnabled,
   getPageViewPingEndpoint,
@@ -17,8 +18,8 @@ describe("analytics", () => {
     process.env = { ...originalEnv };
     delete process.env[ENABLE_FLAG];
     delete process.env[ENDPOINT_VAR];
-    jest.restoreAllMocks();
-    global.fetch = jest.fn();
+    vi.restoreAllMocks();
+    global.fetch = vi.fn();
   });
 
   afterAll(() => {
@@ -59,7 +60,7 @@ describe("analytics", () => {
 
   describe("trackPageView", () => {
     it("sends nothing when the flag is disabled", () => {
-      const sendBeacon = jest.fn();
+      const sendBeacon = vi.fn();
       Object.defineProperty(navigator, "sendBeacon", {
         value: sendBeacon,
         configurable: true,
@@ -72,7 +73,7 @@ describe("analytics", () => {
 
     it("sends a minimal, PII-free beacon when enabled", () => {
       process.env[ENABLE_FLAG] = "true";
-      const sendBeacon = jest.fn().mockReturnValue(true);
+      const sendBeacon = vi.fn().mockReturnValue(true);
       Object.defineProperty(navigator, "sendBeacon", {
         value: sendBeacon,
         configurable: true,
@@ -92,12 +93,12 @@ describe("analytics", () => {
         value: undefined,
         configurable: true,
       });
-      (global.fetch as jest.Mock).mockResolvedValue({ ok: true });
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true });
 
       trackPageView("/dashboard");
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
-      const [url, init] = (global.fetch as jest.Mock).mock.calls[0];
+      const [url, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(url).toBe("/api/analytics/pageview");
       expect(init?.credentials).toBe("omit");
       expect(init?.keepalive).toBe(true);
@@ -113,7 +114,7 @@ describe("analytics", () => {
         value: undefined,
         configurable: true,
       });
-      (global.fetch as jest.Mock).mockRejectedValue(new Error("network down"));
+      (global.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("network down"));
 
       expect(() => trackPageView("/dashboard")).not.toThrow();
     });

@@ -1,11 +1,26 @@
-import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
-import { ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
+import {
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Public } from '../common/decorators/public.decorator';
 import { GoalsService } from '../goals/goals.service';
 import { BalanceService } from './balance.service';
 import { LockedPlansService } from './locked-plans.service';
 import { ListGoalsDto } from './dto/list-goals.dto';
 import { ListLockedDto } from './dto/list-locked.dto';
+import { SavingsListQueryDto } from './dto/pagination.dto';
 import { SavingsService } from './savings.service';
 
 @ApiTags('savings')
@@ -32,64 +47,87 @@ export class SavingsController {
   }
 
   /**
-   * GET /savings/goals?address=&page=&limit=
+   * GET /savings/goals?address=&page=&limit=&sort=
    *
    * Lists an address's goals with progress (target/current amount, status),
-   * newest-first, paginated.
+   * paginated. `page`/`limit`/`sort` are validated and capped via
+   * `SavingsListQueryDto` — an invalid value (non-integer, `page < 1`,
+   * `limit` outside 1-100, or a `sort` other than `asc`/`desc`) is rejected
+   * with a 400 rather than silently coerced.
    */
   @Get('goals')
   @Public()
+  @UsePipes(
+    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: false }),
+  )
   @ApiOperation({ summary: "List an address's savings goals with progress" })
   @ApiQuery({ name: 'address', required: true, type: String })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
   @ApiResponse({
     status: 200,
     description: "Paginated list of the address's goals",
     type: ListGoalsDto,
   })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid page, limit, or sort value',
+  })
   async listGoals(
     @Query('address') address: string,
-    @Query('page') page = 1,
-    @Query('limit') limit = 20,
+    @Query() query: SavingsListQueryDto,
   ): Promise<ListGoalsDto> {
-    const { data, total, page: p, limit: l } =
-      await this.goalsService.listByOwnerPaginated(
-        address,
-        Number(page),
-        Number(limit),
-      );
+    const {
+      data,
+      total,
+      page: p,
+      limit: l,
+    } = await this.goalsService.listByOwnerPaginated(
+      address,
+      query.page,
+      query.limit,
+      query.sort,
+    );
     return { address, goals: data, total, page: p, limit: l };
   }
 
   /**
-   * GET /savings/locked?address=&page=&limit=
+   * GET /savings/locked?address=&page=&limit=&sort=
    *
-   * Lists an address's locked plans, ordered by `unlock_at` ascending
-   * (soonest-unlocking first), paginated.
+   * Lists an address's locked plans, ordered by `unlock_at` (soonest-
+   * unlocking first by default), paginated. `page`/`limit`/`sort` are
+   * validated and capped the same way as `listGoals` above.
    */
   @Get('locked')
   @Public()
+  @UsePipes(
+    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: false }),
+  )
   @ApiOperation({ summary: "List an address's locked savings plans" })
   @ApiQuery({ name: 'address', required: true, type: String })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
   @ApiResponse({
     status: 200,
-    description: "Paginated list of the address's locked plans, ordered by unlock_at",
+    description:
+      "Paginated list of the address's locked plans, ordered by unlock_at",
     type: ListLockedDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid page, limit, or sort value',
   })
   async listLocked(
     @Query('address') address: string,
-    @Query('page') page = 1,
-    @Query('limit') limit = 20,
+    @Query() query: SavingsListQueryDto,
   ): Promise<ListLockedDto> {
-    const { data, total, page: p, limit: l } =
-      await this.lockedPlansService.listByOwner(
-        address,
-        Number(page),
-        Number(limit),
-      );
+    const {
+      data,
+      total,
+      page: p,
+      limit: l,
+    } = await this.lockedPlansService.listByOwner(
+      address,
+      query.page,
+      query.limit,
+      query.sort,
+    );
     return { address, plans: data, total, page: p, limit: l };
   }
 
@@ -104,12 +142,20 @@ export class SavingsController {
   @Public()
   @ApiOperation({ summary: "Get an address's flexible savings balance" })
   @ApiParam({ name: 'address', description: 'Stellar account address' })
-  @ApiResponse({ status: 200, description: 'Balance and timestamps for the account' })
-  @ApiResponse({ status: 404, description: 'No account exists for this address' })
+  @ApiResponse({
+    status: 200,
+    description: 'Balance and timestamps for the account',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'No account exists for this address',
+  })
   async getAccount(@Param('address') address: string) {
     const account = await this.balanceService.findAccount(address);
     if (!account) {
-      throw new NotFoundException(`No savings account found for address: ${address}`);
+      throw new NotFoundException(
+        `No savings account found for address: ${address}`,
+      );
     }
     return account;
   }

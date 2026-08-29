@@ -9,12 +9,6 @@
 //! Schema version: [`EVENT_SCHEMA_VERSION`]. Bump it whenever a change is
 //! breaking for a decoder built against the previous version — see the
 //! README's "Stability guarantees" for the exact rules.
-//!
-//! TODO(issue): implement typed publishers for each event, e.g.
-//!   deposit(owner, amount, balance), withdraw(owner, amount, balance),
-//!   locked_created(id, owner, amount, unlock_at), goal_reached(id, owner),
-//!   group_created(id, creator), group_split_settled(id, member, amount).
-//!   One issue per topic — see the README "Module → issue map".
 
 /// Schema version for the event topics defined below, documented in
 /// `README.md` ("Event schema"). A decoder should read this from the
@@ -27,8 +21,6 @@ pub const EVENT_SCHEMA_VERSION: u32 = 1;
 pub const TOPIC_INIT: &str = "init";
 /// Emitted at the end of a successful `set_admin` call.
 pub const TOPIC_ADMIN_SET: &str = "admin_set";
-/// Emitted at the end of a successful `upgrade` call.
-pub const TOPIC_UPGRADED: &str = "upgraded";
 
 // --- flexible ------------------------------------------------------------
 /// Emitted at the end of a successful `deposit` call.
@@ -72,4 +64,7 @@ pub const TOPIC_GROUP_PAYOUT: &str = "group_payout";
 /// Emitted at the end of a successful `group_set_shares` call.
 pub const TOPIC_GROUP_SHARES_SET: &str = "group_shares_set";
 /// Emitted once per member during a successful `group_settle` call.
+///
+/// Topics: `(Symbol("group_split_settled"), member: Address, group_id: u64)`
+/// Data:   `(group_id: u64, member: Address, amount: i128, timestamp: u64)`
 pub const TOPIC_GROUP_SPLIT_SETTLED: &str = "group_split_settled";

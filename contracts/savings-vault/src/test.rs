@@ -398,6 +398,72 @@ fn flexible_withdraw_exact_balance_succeeds() {
     );
 }
 
+/// Flexible deposit/withdraw round-trip (issue #34).
+///
+/// Funds a user via the mock token, deposits, partially withdraws, asserts
+/// the balance at each step, then confirms an over-withdrawal against the
+/// remaining balance is rejected and leaves that balance untouched. The
+/// existing `flexible_withdraw_over_balance_rejected` /
+/// `flexible_withdraw_exact_balance_succeeds` tests each isolate a single
+/// step; this test exercises the full sequence in one flow, including the
+/// partial-withdrawal-then-over-withdraw case neither of those cover.
+#[test]
+fn flexible_deposit_withdraw_round_trip() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    const DEPOSIT: i128 = 100_000_000; // 100 USDC
+    const PARTIAL_WITHDRAW: i128 = 40_000_000; // 40 USDC
+    const REMAINING: i128 = DEPOSIT - PARTIAL_WITHDRAW; // 60 USDC
+
+    // Fund the user's wallet so deposit's token transfer_in can succeed.
+    mint(&env, &token, &token_admin, &user, DEPOSIT);
+
+    // Deposit the full amount; balance must reflect exactly what was deposited.
+    client.deposit(&user, &DEPOSIT);
+    let account = client.get_account(&user);
+    assert_eq!(
+        account.balance, DEPOSIT,
+        "balance must equal the deposited amount",
+    );
+
+    // Partially withdraw; balance must reflect exactly what remains.
+    client.withdraw(&user, &PARTIAL_WITHDRAW);
+    let account = client.get_account(&user);
+    assert_eq!(
+        account.balance, REMAINING,
+        "balance must be deposit minus the partial withdrawal",
+    );
+
+    // Attempting to withdraw more than the remaining balance must be
+    // rejected, and must not change the balance.
+    let result = client.try_withdraw(&user, &(REMAINING + 1));
+    assert_eq!(
+        result,
+        Err(Ok(Error::InsufficientBalance)),
+        "expected InsufficientBalance when withdrawing {} from a remaining balance of {}",
+        REMAINING + 1,
+        REMAINING,
+    );
+    let account = client.get_account(&user);
+    assert_eq!(
+        account.balance, REMAINING,
+        "balance must be unchanged after a rejected over-withdrawal",
+    );
+
+    // Withdraw exactly what remains; balance must be zero.
+    client.withdraw(&user, &REMAINING);
+    let account = client.get_account(&user);
+    assert_eq!(
+        account.balance, 0,
+        "balance must be zero after withdrawing the full remaining amount",
+    );
+}
+
 /// Locked over-withdrawal: once past the unlock time, attempting to withdraw
 /// more than the locked plan balance must return `Error::InsufficientBalance`.
 #[test]
@@ -560,6 +626,85 @@ fn locked_withdraw_before_unlock_rejected() {
     assert_eq!(
         plan.balance, LOCKED_AMOUNT,
         "locked plan balance must not change after a rejected pre-unlock withdrawal",
+    );
+}
+
+/// Locked plan time-lock enforcement round-trip (issue #35).
+///
+/// Creates a locked plan, attempts an early withdrawal (expects
+/// `StillLocked`), advances the ledger past `unlock_at`, then withdraws
+/// successfully — asserting the plan balance at each step. The existing
+/// `locked_withdraw_before_unlock_rejected` and
+/// `locked_withdraw_exact_balance_after_unlock_succeeds` tests each isolate
+/// one half of this; this test exercises the full create → reject → advance
+/// → withdraw sequence in one flow, matching the issue's exact scenario.
+#[test]
+fn locked_plan_enforces_unlock_time_round_trip() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+
+    const LOCKED_AMOUNT: i128 = 80_000_000; // 80 USDC
+
+    mint(&env, &token, &token_admin, &owner, LOCKED_AMOUNT);
+
+    let now: u64 = 5_000_000;
+    env.ledger().set(LedgerInfo {
+        timestamp: now,
+        protocol_version: 22,
+        sequence_number: 100,
+        network_id: Default::default(),
+        base_reserve: 5_000_000,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: 3_110_400,
+    });
+
+    let unlock_at = now + 1_000;
+    let plan_id = client.locked_create(&owner, &LOCKED_AMOUNT, &unlock_at);
+
+    // Plan balance right after creation must equal the locked amount.
+    let plan = client.locked_plan(&plan_id);
+    assert_eq!(
+        plan.balance, LOCKED_AMOUNT,
+        "locked plan balance must equal the amount locked at creation",
+    );
+
+    // Attempt an early withdrawal — must be rejected with StillLocked, and
+    // must not move the balance.
+    let early_result = client.try_locked_withdraw(&owner, &plan_id, &LOCKED_AMOUNT);
+    assert_eq!(
+        early_result,
+        Err(Ok(Error::StillLocked)),
+        "expected StillLocked when withdrawing before unlock_at",
+    );
+    let plan = client.locked_plan(&plan_id);
+    assert_eq!(
+        plan.balance, LOCKED_AMOUNT,
+        "locked plan balance must be unchanged after a rejected early withdrawal",
+    );
+
+    // Advance the ledger past unlock_at.
+    env.ledger().set(LedgerInfo {
+        timestamp: unlock_at + 1,
+        protocol_version: 22,
+        sequence_number: 200,
+        network_id: Default::default(),
+        base_reserve: 5_000_000,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: 3_110_400,
+    });
+
+    // Now the withdrawal must succeed, and the plan balance must be zero.
+    client.locked_withdraw(&owner, &plan_id, &LOCKED_AMOUNT);
+    let plan = client.locked_plan(&plan_id);
+    assert_eq!(
+        plan.balance, 0,
+        "locked plan balance must be zero after a full post-unlock withdrawal",
     );
 }
 

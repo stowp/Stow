@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Goal, GoalStatus } from './entities/goal.entity';
@@ -99,7 +103,9 @@ export class GoalsService {
       );
     }
     if (goal.status === GoalStatus.CLAIMED) {
-      throw new BadRequestException(`Goal ${onChainId} has already been claimed`);
+      throw new BadRequestException(
+        `Goal ${onChainId} has already been claimed`,
+      );
     }
 
     goal.status = GoalStatus.CLAIMED;
@@ -116,19 +122,21 @@ export class GoalsService {
   /**
    * Lists an owner's goals with progress fields, paginated. `limit` is
    * capped at 100 to bound query cost, matching the convention used by
-   * `NotificationsService.findAllForUser`.
+   * `NotificationsService.findAllForUser`. Always ordered by `created_at`;
+   * `sort` only controls the direction (default `desc`, newest-first).
    */
   async listByOwnerPaginated(
     owner: string,
     page = 1,
     limit = 20,
+    sort: 'asc' | 'desc' = 'desc',
   ): Promise<PaginatedGoals> {
     const take = Math.min(limit, 100);
     const skip = (page - 1) * take;
 
     const [data, total] = await this.goalRepository.findAndCount({
       where: { owner },
-      order: { created_at: 'DESC' },
+      order: { created_at: sort === 'asc' ? 'ASC' : 'DESC' },
       skip,
       take,
     });
@@ -148,8 +156,7 @@ export class GoalsService {
     );
     return {
       total_goals: goals.length,
-      active_goals: goals.filter((g) => g.status === GoalStatus.ACTIVE)
-        .length,
+      active_goals: goals.filter((g) => g.status === GoalStatus.ACTIVE).length,
       reached_goals: goals.filter((g) => g.status === GoalStatus.REACHED)
         .length,
       total_target: totalTarget.toString(),
