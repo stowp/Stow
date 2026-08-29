@@ -72,18 +72,17 @@ export default function GroupDetailPage({
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto max-w-2xl">
         <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <Users className="h-8 w-8 text-brand" />
-            <h1 className="text-3xl font-semibold text-foreground">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
+            <Users className="h-7 w-7 sm:h-8 sm:w-8 text-brand shrink-0" />
+            <h1 className="text-2xl sm:text-3xl font-semibold text-foreground break-words">
               {group.name}
             </h1>
           </div>
           <span
-            className={`inline-block rounded-full px-3 py-1 text-xs font-medium ${
-              group.settled
-                ? "bg-muted/20 text-muted"
-                : "bg-brand/10 text-brand"
-            }`}
+            className={`inline-block rounded-full px-3 py-1 text-xs font-medium ${group.settled
+              ? "bg-muted/20 text-muted"
+              : "bg-brand/10 text-brand"
+              }`}
           >
             {group.settled ? "Closed" : "Open"}
           </span>
@@ -107,12 +106,12 @@ export default function GroupDetailPage({
               {group.members.map((member) => (
                 <li
                   key={member.address}
-                  className="flex items-center justify-between border-t border-border pt-3 first:border-t-0 first:pt-0"
+                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-t border-border pt-3 first:border-t-0 first:pt-0"
                 >
-                  <span className="font-mono text-sm text-foreground">
+                  <span className="font-mono text-sm text-foreground break-all">
                     {member.address}
                   </span>
-                  <span className="text-sm text-muted">
+                  <span className="text-sm text-muted sm:text-right whitespace-nowrap">
                     {formatStroopsAmount(member.contributed)} XLM
                   </span>
                 </li>
