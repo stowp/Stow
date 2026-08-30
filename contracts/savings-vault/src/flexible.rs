@@ -1,6 +1,6 @@
 //! Flexible savings — deposit and withdraw any time.
 
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{Address, Env};
 
 use crate::admin;
 use crate::error::Error;
@@ -39,17 +39,18 @@ pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
         return Err(Error::DepositBelowMinimum);
     }
 
-    let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
-
     let now = env.ledger().timestamp();
     let key = DataKey::Flexible(from.clone());
-    let mut account: FlexibleAccount =
-        env.storage().persistent().get(&key).unwrap_or(FlexibleAccount {
-            owner: from.clone(),
-            balance: 0,
-            created_at: now,
-            updated_at: now,
-        });
+    let existing: Option<FlexibleAccount> = env.storage().persistent().get(&key);
+    if existing.is_some() {
+        storage::extend_persistent_ttl(env, &key);
+    }
+    let mut account = existing.unwrap_or(FlexibleAccount {
+        owner: from.clone(),
+        balance: 0,
+        created_at: now,
+        updated_at: now,
+    });
 
     let new_balance = account.balance.checked_add(amount).ok_or(Error::Overflow)?;
 
@@ -58,12 +59,12 @@ pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
         return Err(Error::DepositCapExceeded);
     }
 
-    let token_client = token::Client::new(env, &token_address);
-    token_client.transfer(&from, &env.current_contract_address(), &amount);
+    storage::transfer_in(env, &from, amount)?;
 
     account.balance = new_balance;
     account.updated_at = now;
     env.storage().persistent().set(&key, &account);
+    storage::extend_persistent_ttl(env, &key);
 
     env.events()
         .publish((TOPIC_DEPOSIT, from.clone()), (from, amount, new_balance, now));
@@ -97,6 +98,7 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
     let key = DataKey::Flexible(owner.clone());
     let mut account: FlexibleAccount =
         env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
 
     if amount > account.balance {
         return Err(Error::InsufficientBalance);
@@ -104,14 +106,13 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
 
     let new_balance = account.balance.checked_sub(amount).ok_or(Error::Overflow)?;
 
-    let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
-    let token_client = token::Client::new(env, &token_address);
-    token_client.transfer(&env.current_contract_address(), &owner, &amount);
+    storage::transfer_out(env, &owner, amount)?;
 
     let now = env.ledger().timestamp();
     account.balance = new_balance;
     account.updated_at = now;
     env.storage().persistent().set(&key, &account);
+    storage::extend_persistent_ttl(env, &key);
 
     env.events().publish(
         (TOPIC_WITHDRAW, owner.clone()),
@@ -123,8 +124,8 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
 
 /// Read the caller's flexible account (or `NotFound`).
 pub fn get_account(env: &Env, owner: Address) -> Result<FlexibleAccount, Error> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Flexible(owner))
-        .ok_or(Error::NotFound)
+    let key = DataKey::Flexible(owner);
+    let account = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
+    Ok(account)
 }

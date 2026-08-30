@@ -1,6 +1,6 @@
 //! Locked savings — deterministic, on-chain time locks.
 
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{Address, Env};
 
 use crate::error::Error;
 use crate::events::{TOPIC_LOCKED_CREATED, TOPIC_LOCKED_TOP_UP, TOPIC_LOCKED_WITHDRAW};
@@ -24,9 +24,7 @@ pub fn create(env: &Env, owner: Address, amount: i128, unlock_at: u64) -> Result
         return Err(Error::InvalidUnlockTime);
     }
 
-    let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
-    let token_client = token::Client::new(env, &token_address);
-    token_client.transfer(&owner, &env.current_contract_address(), &amount);
+    storage::transfer_in(env, &owner, amount)?;
 
     let id = storage::next_id(env, DataKey::NextLockedId);
     let now = env.ledger().timestamp();
@@ -37,7 +35,9 @@ pub fn create(env: &Env, owner: Address, amount: i128, unlock_at: u64) -> Result
         unlock_at,
         created_at: now,
     };
-    env.storage().persistent().set(&DataKey::Locked(id), &plan);
+    let key = DataKey::Locked(id);
+    env.storage().persistent().set(&key, &plan);
+    storage::extend_persistent_ttl(env, &key);
 
     env.events().publish(
         (TOPIC_LOCKED_CREATED, owner.clone(), id),
@@ -61,18 +61,18 @@ pub fn top_up(env: &Env, owner: Address, plan_id: u64, amount: i128) -> Result<(
 
     let key = DataKey::Locked(plan_id);
     let mut plan: LockedPlan = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
 
     if plan.owner != owner {
         return Err(Error::Unauthorized);
     }
 
-    let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
-    let token_client = token::Client::new(env, &token_address);
-    token_client.transfer(&owner, &env.current_contract_address(), &amount);
+    storage::transfer_in(env, &owner, amount)?;
 
     let new_balance = plan.balance.checked_add(amount).ok_or(Error::Overflow)?;
     plan.balance = new_balance;
     env.storage().persistent().set(&key, &plan);
+    storage::extend_persistent_ttl(env, &key);
 
     let now = env.ledger().timestamp();
     env.events().publish(
@@ -108,6 +108,7 @@ pub fn withdraw(env: &Env, owner: Address, plan_id: u64, amount: i128) -> Result
 
     let key = DataKey::Locked(plan_id);
     let mut plan: LockedPlan = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
 
     if plan.owner != owner {
         return Err(Error::Unauthorized);
@@ -121,13 +122,12 @@ pub fn withdraw(env: &Env, owner: Address, plan_id: u64, amount: i128) -> Result
         return Err(Error::StillLocked);
     }
 
-    let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
-    let token_client = token::Client::new(env, &token_address);
-    token_client.transfer(&env.current_contract_address(), &owner, &amount);
+    storage::transfer_out(env, &owner, amount)?;
 
     let new_balance = plan.balance.checked_sub(amount).ok_or(Error::Overflow)?;
     plan.balance = new_balance;
     env.storage().persistent().set(&key, &plan);
+    storage::extend_persistent_ttl(env, &key);
 
     let now = env.ledger().timestamp();
     env.events().publish(
@@ -139,8 +139,8 @@ pub fn withdraw(env: &Env, owner: Address, plan_id: u64, amount: i128) -> Result
 }
 
 pub fn get_plan(env: &Env, plan_id: u64) -> Result<LockedPlan, Error> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Locked(plan_id))
-        .ok_or(Error::NotFound)
+    let key = DataKey::Locked(plan_id);
+    let plan = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
+    Ok(plan)
 }

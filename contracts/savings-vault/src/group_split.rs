@@ -2,12 +2,12 @@
 //!
 //! Shares are expressed in basis points (bps) and must sum to 10_000.
 
-use soroban_sdk::{token, Address, Env, Map, Vec};
+use soroban_sdk::{Address, Env, Map, Vec};
 
 use crate::admin::require_not_paused;
 use crate::error::Error;
 use crate::events::{TOPIC_GROUP_SHARES_SET, TOPIC_GROUP_SPLIT_SETTLED};
-use crate::storage::extend_instance_ttl;
+use crate::storage::{self, extend_instance_ttl};
 use crate::types::{DataKey, Group};
 
 pub const TOTAL_BPS: u32 = 10_000;
@@ -65,6 +65,7 @@ pub fn set_shares(
 
     let key = DataKey::Group(group_id);
     let mut group: Group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
 
     if group.creator != creator {
         return Err(Error::Unauthorized);
@@ -91,6 +92,7 @@ pub fn set_shares(
 
     group.shares_bps = shares_bps;
     env.storage().persistent().set(&key, &group);
+    storage::extend_persistent_ttl(env, &key);
 
     env.events().publish(
         (TOPIC_GROUP_SHARES_SET, creator.clone(), group_id),
@@ -136,6 +138,7 @@ pub fn settle(env: &Env, caller: Address, group_id: u64) -> Result<(), Error> {
 
     let key = DataKey::Group(group_id);
     let mut group: Group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
 
     // Shares can only be set on a closed group, so we check `open` first.
     if group.open {
@@ -145,14 +148,6 @@ pub fn settle(env: &Env, caller: Address, group_id: u64) -> Result<(), Error> {
     if group.shares_bps.is_empty() {
         return Err(Error::InvalidShares);
     }
-
-    let token_address: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Token)
-        .ok_or(Error::NotInitialized)?;
-    let token_client = token::Client::new(env, &token_address);
-    let contract_address = env.current_contract_address();
 
     let pool = group.balance;
     let now = env.ledger().timestamp();
@@ -192,7 +187,7 @@ pub fn settle(env: &Env, caller: Address, group_id: u64) -> Result<(), Error> {
             continue;
         }
 
-        token_client.transfer(&contract_address, &member, &share);
+        storage::transfer_out(env, &member, share)?;
 
         // One event per paying member.
         // Topics: (symbol, member_address, group_id)  — filterable by the indexer.
@@ -207,6 +202,7 @@ pub fn settle(env: &Env, caller: Address, group_id: u64) -> Result<(), Error> {
     // nothing (all shares would be 0).
     group.balance = 0;
     env.storage().persistent().set(&key, &group);
+    storage::extend_persistent_ttl(env, &key);
 
     Ok(())
 }
