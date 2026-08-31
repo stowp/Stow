@@ -1,6 +1,6 @@
 //! Goal-based savings — save toward a target with automated milestones.
 
-use soroban_sdk::{token, Address, Env, String};
+use soroban_sdk::{Address, Env, String};
 
 use crate::error::Error;
 use crate::events::{
@@ -33,7 +33,9 @@ pub fn create(env: &Env, owner: Address, name: String, target_amount: i128) -> R
         created_at: now,
         reached_at: None,
     };
-    env.storage().persistent().set(&DataKey::Goal(id), &goal);
+    let key = DataKey::Goal(id);
+    env.storage().persistent().set(&key, &goal);
+    storage::extend_persistent_ttl(env, &key);
 
     env.events().publish(
         (TOPIC_GOAL_CREATED, owner.clone(), id),
@@ -59,10 +61,9 @@ pub fn contribute(env: &Env, from: Address, goal_id: u64, amount: i128) -> Resul
         .persistent()
         .get(&key)
         .ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
 
-    let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
-    let token_client = token::Client::new(env, &token_address);
-    token_client.transfer(&from, &env.current_contract_address(), &amount);
+    storage::transfer_in(env, &from, amount)?;
 
     let was_reached = goal.reached_at.is_some();
     let new_saved = goal
@@ -92,6 +93,7 @@ pub fn contribute(env: &Env, from: Address, goal_id: u64, amount: i128) -> Resul
     }
 
     env.storage().persistent().set(&key, &goal);
+    storage::extend_persistent_ttl(env, &key);
 
     Ok(())
 }
@@ -118,9 +120,7 @@ pub fn claim(env: &Env, owner: Address, goal_id: u64) -> Result<(), Error> {
         return Err(Error::GoalNotReached);
     }
 
-    let token_address = storage::get_token(env).ok_or(Error::NotInitialized)?;
-    let token_client = token::Client::new(env, &token_address);
-    token_client.transfer(&env.current_contract_address(), &owner, &goal.saved_amount);
+    storage::transfer_out(env, &owner, goal.saved_amount)?;
 
     let now = env.ledger().timestamp();
     env.events().publish(
@@ -136,10 +136,10 @@ pub fn claim(env: &Env, owner: Address, goal_id: u64) -> Result<(), Error> {
 }
 
 pub fn get_goal(env: &Env, goal_id: u64) -> Result<Goal, Error> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Goal(goal_id))
-        .ok_or(Error::NotFound)
+    let key = DataKey::Goal(goal_id);
+    let goal = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    storage::extend_persistent_ttl(env, &key);
+    Ok(goal)
 }
 
 /// Helper to allocate the next goal id.

@@ -23,16 +23,16 @@
 //!   account drained to zero and abandoned) will eventually hit its
 //!   minimum persistent TTL and become eligible for archival by the
 //!   network; reading an archived entry then requires a `restore` before
-//!   the next `get`. This crate does not currently call
-//!   `extend_ttl`/`restore` on individual persistent entries — tracked as
-//!   follow-up work, not part of this documentation pass.
+//!   the next `get`. [`extend_persistent_ttl`] is called after every read
+//!   and write of a `Flexible`, `Locked`, `Goal`, or `Group` record so a
+//!   record touched within the bump window never expires.
 //!
 //! ## TTL policy
 //!
 //! [`INSTANCE_BUMP_AMOUNT`] / [`INSTANCE_LIFETIME_THRESHOLD`] control the
-//! instance TTL only (see constants below). Persistent entries have no
-//! per-key policy configured here; they inherit the ledger's default
-//! minimum persistent TTL and are refreshed implicitly by rewrites.
+//! instance TTL. [`PERSISTENT_BUMP_AMOUNT`] / [`PERSISTENT_LIFETIME_THRESHOLD`]
+//! control persistent per-entry TTLs via [`extend_persistent_ttl`], called
+//! on every read and write of an `Account`/`Plan`/`Goal`/`Group` record.
 //!
 //! ## Storage cost for large groups
 //!
@@ -44,21 +44,45 @@
 //! enforced cap on group size; a very large group is progressively more
 //! expensive to mutate and to keep from expiring than a small one.
 
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{token, Address, Env};
 
+use crate::error::Error;
 use crate::types::DataKey;
 
 // --- TTL constants (ledgers) --------------------------------------------
-// TODO(issue): tune these for mainnet. Roughly: 1 ledger ~= 5s.
+// Roughly: 1 ledger ~= 5s on mainnet cadence.
 pub const DAY_IN_LEDGERS: u32 = 17_280;
+
+/// Instance TTL: bumped at the top of every state-changing entrypoint, so it
+/// only lapses if the contract sees no mutating traffic for a full bump
+/// window. 30 days gives generous headroom over any realistic call cadence
+/// while keeping the per-call rent cost predictable.
 pub const INSTANCE_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub const INSTANCE_LIFETIME_THRESHOLD: u32 = INSTANCE_BUMP_AMOUNT - DAY_IN_LEDGERS;
+
+/// Persistent per-entry TTL: bumped on every read/write of a `Flexible`,
+/// `Locked`, `Goal`, or `Group` record via [`extend_persistent_ttl`]. Same
+/// window as the instance bump — a record touched at least once a month
+/// (deposit, withdraw, contribute, a simple query, ...) never expires.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
+pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = PERSISTENT_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
 /// Bump the instance TTL. Call at the top of every state-changing entrypoint.
 pub fn extend_instance_ttl(env: &Env) {
     env.storage()
         .instance()
         .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+}
+
+/// Bump a persistent entry's TTL. Call after every read and write of a
+/// `Flexible`, `Locked`, `Goal`, or `Group` record so it does not become
+/// eligible for archival between touches.
+pub fn extend_persistent_ttl(env: &Env, key: &DataKey) {
+    env.storage().persistent().extend_ttl(
+        key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 /// The token (e.g. USDC) this vault custodies, or `None` before `initialize`.
@@ -86,4 +110,39 @@ pub fn next_id(env: &Env, key: DataKey) -> u64 {
     let next = current + 1;
     env.storage().instance().set(&key, &next);
     next
+}
+
+// --- SEP-41 token movement -------------------------------------------------
+//
+// Every module moves funds through these two helpers rather than building a
+// `token::Client` and calling `transfer` directly, so amount validation and
+// the transfer direction (in vs. out of the vault) live in exactly one
+// place.
+
+/// Move `amount` of the vault token from `from` into the contract.
+///
+/// Errors `Error::InvalidAmount` if `amount <= 0`, `Error::NotInitialized`
+/// if the vault token has not been configured.
+pub fn transfer_in(env: &Env, from: &Address, amount: i128) -> Result<(), Error> {
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let token_address = get_token(env).ok_or(Error::NotInitialized)?;
+    let token_client = token::Client::new(env, &token_address);
+    token_client.transfer(from, &env.current_contract_address(), &amount);
+    Ok(())
+}
+
+/// Move `amount` of the vault token from the contract out to `to`.
+///
+/// Errors `Error::InvalidAmount` if `amount <= 0`, `Error::NotInitialized`
+/// if the vault token has not been configured.
+pub fn transfer_out(env: &Env, to: &Address, amount: i128) -> Result<(), Error> {
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let token_address = get_token(env).ok_or(Error::NotInitialized)?;
+    let token_client = token::Client::new(env, &token_address);
+    token_client.transfer(&env.current_contract_address(), to, &amount);
+    Ok(())
 }
