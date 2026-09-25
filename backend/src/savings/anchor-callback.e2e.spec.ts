@@ -174,6 +174,23 @@ describe('Anchor SEP-24 Callback E2E', () => {
         .expect(400);
     });
 
+    it('should reject callback payloads with unknown fields', async () => {
+      const payload = {
+        transaction_id: 'anchor-tx-extra-field',
+        status: 'completed',
+        event_id: 'evt_' + Date.now(),
+        extra: 'unexpected',
+      };
+
+      const signature = createSignature(JSON.stringify(payload));
+
+      await request(app.getHttpServer())
+        .post('/savings/anchor/callbacks/sep24')
+        .set('X-Webhook-Signature', signature)
+        .send(payload)
+        .expect(400);
+    });
+
     it('should handle idempotent callbacks (deposit already at status)', async () => {
       const payload = {
         transaction_id: 'anchor-tx-idempotent',
