@@ -44,6 +44,11 @@ pub struct WithdrawRequest {
     pub id: u64,
     pub owner: Address,
     pub shares: i128,
+    /// Vault-token amount this request pays out, fixed at request time via
+    /// `accounting::convert_to_assets(shares)`. A later `harvest` does not
+    /// change it; `cancel_withdraw` re-mints shares from this amount at the
+    /// then-current exchange rate.
+    pub assets: i128,
     /// Ledger timestamp after which `claim_withdraw` is permitted.
     pub claimable_at: u64,
     pub requested_at: u64,
@@ -98,4 +103,11 @@ pub enum DataKey {
     Position(Address),
     /// `WithdrawRequest` by id.
     WithdrawRequest(u64),
+    /// Sum of `assets` across all pending (neither claimed nor cancelled)
+    /// `WithdrawRequest`s. Those shares are already burned, so the assets
+    /// backing them are owed to the requesters and must be excluded from
+    /// `total_assets()` — otherwise the remaining shareholders' exchange
+    /// rate would be inflated until the request is claimed. Kept as a
+    /// running total for the same reason as `TotalShares`. Absent means `0`.
+    ReservedWithdrawAssets,
 }

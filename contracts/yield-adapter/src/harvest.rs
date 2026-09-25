@@ -23,6 +23,12 @@ use crate::error::Error;
 /// - Emits a `harvested` event with the signed delta and fee taken (`0` on
 ///   a loss).
 ///
+/// Overflow safety (issue #249): the signed delta (`reported - tracked`) and
+/// every running-total update must use `checked_sub` / `checked_add`
+/// returning `Error::Overflow` — a strategy is untrusted and can report any
+/// `i128`, including values chosen to overflow. Read total assets through
+/// `accounting::try_total_assets`, not the aborting `total_assets`.
+///
 /// TODO(issue): implement.
 pub fn harvest(_env: &Env, _caller: Address) -> Result<i128, Error> {
     unimplemented!("harvest: harvest")
@@ -37,6 +43,12 @@ pub fn harvest(_env: &Env, _caller: Address) -> Result<i128, Error> {
 /// the treasury extract value that was never actually earned, at
 /// depositors' expense.
 ///
+/// Overflow safety (issue #249): compute the fee with
+/// [`crate::fees::compute_performance_fee`] (overflow-safe multiply-then-divide),
+/// and credit it to `FeesAccrued` / derive the remainder with
+/// `checked_add` / `checked_sub`, mapping `None` to `Error::Overflow`. No
+/// step here may use unchecked `+`, `-`, or `*`.
+///
 /// TODO(issue): implement.
 pub fn apply_performance_fee(_env: &Env, _yield_amount: i128) -> Result<i128, Error> {
     unimplemented!("harvest: apply_performance_fee")
@@ -47,6 +59,11 @@ pub fn apply_performance_fee(_env: &Env, _yield_amount: i128) -> Result<i128, Er
 /// `DataKey::LastHarvestAt`. Exists so a griefer can't spam `harvest` calls
 /// to burn the adapter's ledger-write budget; a legitimate keeper only needs
 /// to call it a few times a day at most.
+///
+/// Overflow safety (issue #249): compute the next-allowed time as
+/// `last_harvest_at.checked_add(interval)` (→ `Error::Overflow`), never
+/// `now - last_harvest_at`, which underflows `u64` if the stored timestamp
+/// is ever ahead of the ledger clock.
 ///
 /// TODO(issue): implement.
 pub fn check_harvest_interval(_env: &Env) -> Result<(), Error> {
