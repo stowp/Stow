@@ -39,11 +39,10 @@ pub const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = PERSISTENT_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
 /// Bump the instance TTL. Call at the top of every state-changing entrypoint.
-///
-/// TODO(issue): implement — see `savings-vault::storage::extend_instance_ttl`
-/// for the reference implementation; this adapter's version is identical.
-pub fn extend_instance_ttl(_env: &Env) {
-    unimplemented!("storage: extend_instance_ttl")
+pub fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 }
 
 /// Bump a persistent entry's TTL. Call after every read and write of a
@@ -71,10 +70,8 @@ pub fn set_token(_env: &Env, _token: &Address) {
 }
 
 /// The contract admin, or `None` before `initialize`.
-///
-/// TODO(issue): implement.
-pub fn get_admin(_env: &Env) -> Option<Address> {
-    unimplemented!("storage: get_admin")
+pub fn get_admin(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Admin)
 }
 
 /// Allocate and persist the next id for the given counter key
