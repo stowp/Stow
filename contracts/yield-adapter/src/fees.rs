@@ -17,10 +17,11 @@ pub const MAX_PERFORMANCE_FEE_BPS: u32 = 3_000; // 30%
 
 /// Validate a proposed performance fee. Errors `Error::FeeTooHigh` if
 /// `bps > MAX_PERFORMANCE_FEE_BPS`.
-///
-/// TODO(issue): implement.
-pub fn validate_fee_bps(_bps: u32) -> Result<(), Error> {
-    unimplemented!("fees: validate_fee_bps")
+pub fn validate_fee_bps(bps: u32) -> Result<(), Error> {
+    if bps > MAX_PERFORMANCE_FEE_BPS {
+        return Err(Error::FeeTooHigh);
+    }
+    Ok(())
 }
 
 /// Read the current accrued-and-unswept fee balance.
