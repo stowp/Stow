@@ -89,14 +89,24 @@ This adapter treats it as opaque and reaches it only through
 `env.invoke_contract`. At minimum a usable strategy must expose:
 
 - `deposit(from: Address, amount: i128)` — accept `amount` of the shared
-  SEP-41 token from the adapter.
-- `withdraw(to: Address, amount: i128)` — return `amount` to the adapter.
+  SEP-41 token from the adapter. The strategy **pulls** the funds itself by
+  calling `token.transfer(from, <strategy>, amount)`; the adapter
+  pre-authorizes exactly that one transfer (via
+  `authorize_as_current_contract`) immediately before calling `deposit`,
+  and is the direct invoker, so `from.require_auth()` inside the strategy
+  succeeds.
+- `withdraw(to: Address, amount: i128)` — transfer `amount` back to `to`
+  (the adapter, which is the direct invoker). The adapter measures what
+  actually arrived from its own token balance rather than trusting the call.
 - `balance(of: Address) -> i128` — report the adapter's current claim,
   **including** any accrued yield (or loss) — this is what `harvest` diffs
-  against the adapter's last-known deployed balance to compute yield.
+  against the adapter's last-known deployed balance to compute yield. A
+  negative report is treated as `0`.
 
-A minimal in-repo mock implementing this interface (for tests) is tracked as
-its own issue — see `test.rs`'s module doc.
+`test.rs` contains a minimal mock (`mock_strategy::MockStrategy`)
+implementing this interface plus a test-only `set_reported_balance` hook
+for simulating yield/loss. A fuller mock for `harvest` / `migrate_strategy`
+tests is still tracked as its own issue.
 
 **Trust boundary**: the adapter does not verify a strategy's solvency or
 correctness beyond the `balance` figure it reports. A malicious or buggy
@@ -115,15 +125,168 @@ requirements, validation order, and errors returned.
 
 ## Event schema
 
-See `events.rs` for the canonical topic registry. Schema version:
-`EVENT_SCHEMA_VERSION = 1`. Topics, grouped by area:
+**Version: `1`** (see [`events::EVENT_SCHEMA_VERSION`](src/events.rs)). The
+[`init`](#init) event's data payload includes `schema_version` so an indexer
+can assert it was built against a compatible schema before decoding
+subsequent events from that contract instance. Stability rules are the same
+as `savings-vault`'s (see its README's "Stability guarantees"): topic names
+are never renamed or reused; appending a trailing data field is additive;
+removing/reordering fields or changing a type bumps the version.
 
-- Lifecycle: `init`, `admin_set`, `paused_changed`, `upgraded`
-- Deposit/withdraw: `deposited`, `withdraw_requested`, `withdraw_claimed`, `withdraw_cancelled`
-- Strategy: `strategy_registered`, `strategy_deregistered`, `strategy_changed`
+### Encoding
+
+Every event is emitted through a typed publisher in `src/events.rs`
+(`publish_<topic>`), never by calling `env.events().publish` inline, so each
+payload below maps to exactly one function.
+
+- **Topics** — a tuple whose first element is always a `Symbol` naming the
+  event (built with `Symbol::new`). Events about a specific depositor add
+  that `Address` as the second topic; events about a specific withdraw
+  request add its `u64` id as the third; `strategy_registered` adds the
+  strategy id as the second. Filter server-side on these without decoding
+  data.
+- **Data** — a fixed-order tuple, typed per the tables below. Decode
+  positionally, not by name.
+- Events are only emitted by *successful* calls: a call that returns an
+  error emits nothing (its state and events are rolled back).
+- All amounts are `i128` vault-token stroops; shares are `i128`; all
+  timestamps are `u64` ledger timestamps (`env.ledger().timestamp()`).
+
+Topics, grouped by area:
+
+- Lifecycle: [`init`](#init), [`admin_set`](#admin_set),
+  [`paused_changed`](#paused_changed), [`upgraded`](#upgraded)
+- Deposit/withdraw: [`deposited`](#deposited),
+  [`withdraw_requested`](#withdraw_requested),
+  [`withdraw_claimed`](#withdraw_claimed),
+  [`withdraw_cancelled`](#withdraw_cancelled)
+- Strategy: [`strategy_registered`](#strategy_registered),
+  `strategy_deregistered`, [`strategy_changed`](#strategy_changed)
 - Harvest/fees: `harvested`, `fee_collected`
 
-Each topic's exact data payload will be finalized alongside the entrypoint
-that emits it (see the corresponding module doc comment) — documented here
-once implemented, mirroring `savings-vault/README.md`'s "Event schema"
-section.
+`strategy_deregistered`, `harvested`, and `fee_collected` payloads will be
+documented here alongside the entrypoints that emit them (still
+unimplemented).
+
+### Lifecycle
+
+#### `init`
+Emitted once, at the end of a successful `initialize`.
+Topics: `(Symbol("init"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `admin` | `Address` | Initial admin. |
+| `treasury` | `Address` | Initial fee treasury. |
+| `token` | `Address` | SEP-41 token this adapter routes. |
+| `schema_version` | `u32` | Value of `EVENT_SCHEMA_VERSION` at deploy time. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `admin_set`
+Emitted at the end of a successful `set_admin`.
+Topics: `(Symbol("admin_set"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `previous_admin` | `Address` | Admin before rotation. |
+| `new_admin` | `Address` | Admin after rotation. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `paused_changed`
+Emitted at the end of every successful `set_paused`, including one that
+re-sets the current value.
+Topics: `(Symbol("paused_changed"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `caller` | `Address` | Admin who made the call. |
+| `paused` | `bool` | The pause flag after the call. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `upgraded`
+To be emitted at the end of a successful `upgrade` (the typed publisher
+`events::publish_upgraded` exists and its payload is fixed; the `upgrade`
+entrypoint itself is still unimplemented).
+Topics: `(Symbol("upgraded"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `caller` | `Address` | Admin who triggered the upgrade. |
+| `new_wasm_hash` | `BytesN<32>` | Hash of the newly-installed Wasm. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+### Deposit / withdraw
+
+#### `deposited`
+Emitted at the end of a successful `deposit`.
+Topics: `(Symbol("deposited"), owner: Address)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `owner` | `Address` | Depositor. |
+| `assets` | `i128` | Vault-token amount deposited. |
+| `shares_minted` | `i128` | Shares minted by this deposit. |
+| `position_shares` | `i128` | Owner's total shares after the deposit. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `withdraw_requested`
+Emitted at the end of a successful `request_withdraw`.
+Topics: `(Symbol("withdraw_requested"), owner: Address, request_id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u64` | New withdraw request id. |
+| `owner` | `Address` | Request owner. |
+| `shares_burned` | `i128` | Shares burned from the owner's position. |
+| `assets` | `i128` | Payout fixed at request time. |
+| `claimable_at` | `u64` | Ledger timestamp from which `claim_withdraw` is allowed. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `withdraw_claimed`
+Emitted at the end of a successful `claim_withdraw`.
+Topics: `(Symbol("withdraw_claimed"), owner: Address, request_id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u64` | Withdraw request id. |
+| `owner` | `Address` | Request owner (and payout recipient). |
+| `assets` | `i128` | Amount transferred out. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `withdraw_cancelled`
+Emitted at the end of a successful `cancel_withdraw`.
+Topics: `(Symbol("withdraw_cancelled"), owner: Address, request_id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u64` | Withdraw request id. |
+| `owner` | `Address` | Request owner. |
+| `assets` | `i128` | The request's fixed asset amount, returned to the pool. |
+| `shares_reminted` | `i128` | Shares re-minted to the owner at the current rate (may differ from the shares originally burned). |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+### Strategy
+
+#### `strategy_registered`
+Emitted at the end of a successful `register_strategy`.
+Topics: `(Symbol("strategy_registered"), strategy_id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `strategy_id` | `u64` | New strategy id. |
+| `address` | `Address` | Strategy contract address. |
+| `name` | `String` | Human-readable name. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `strategy_changed`
+Emitted at the end of a successful `set_active_strategy` (`from: None`),
+`circuit_breaker::emergency_withdraw_all` (`to: None`), and — once
+implemented — `migrate_strategy` (both set).
+Topics: `(Symbol("strategy_changed"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `from` | `Option<u64>` | Previously active strategy id, or `None`. |
+| `to` | `Option<u64>` | Newly active strategy id, or `None` (funds held idle). |
+| `assets_moved` | `i128` | Vault token actually moved by the change (`0` on first activation; the amount recovered on an emergency withdraw). |
+| `timestamp` | `u64` | Ledger timestamp of the call. |

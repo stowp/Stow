@@ -10,10 +10,10 @@
 //! - **Instance storage** for small, hot, singleton values read on nearly
 //!   every call: `Admin`, `Treasury`, `Token`, `Paused`,
 //!   `PerformanceFeeBps`, `HarvestInterval`, `LastHarvestAt`,
-//!   `WithdrawCooldown`, `ActiveStrategy`, `TotalShares`, `FeesAccrued`, and
-//!   the `Next*Id` counters. TTL bumped as a single unit by
-//!   [`extend_instance_ttl`], called at the top of every state-changing
-//!   entrypoint.
+//!   `WithdrawCooldown`, `ActiveStrategy`, `TotalShares`, `FeesAccrued`,
+//!   `ReservedWithdrawAssets`, and the `Next*Id` counters. TTL bumped as a
+//!   single unit by [`extend_instance_ttl`], called at the top of every
+//!   state-changing entrypoint.
 //! - **Persistent storage** for unbounded, per-key records: `Strategy(u64)`,
 //!   `Position(Address)`, `WithdrawRequest(u64)`. TTL refreshed per-entry via
 //!   [`extend_persistent_ttl`] on every read and write.
@@ -39,42 +39,37 @@ pub const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = PERSISTENT_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
 /// Bump the instance TTL. Call at the top of every state-changing entrypoint.
-///
-/// TODO(issue): implement — see `savings-vault::storage::extend_instance_ttl`
-/// for the reference implementation; this adapter's version is identical.
-pub fn extend_instance_ttl(_env: &Env) {
-    unimplemented!("storage: extend_instance_ttl")
+pub fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 }
 
 /// Bump a persistent entry's TTL. Call after every read and write of a
 /// `Strategy`, `Position`, or `WithdrawRequest` record.
-///
-/// TODO(issue): implement — mirrors
-/// `savings-vault::storage::extend_persistent_ttl`.
-pub fn extend_persistent_ttl(_env: &Env, _key: &DataKey) {
-    unimplemented!("storage: extend_persistent_ttl")
+pub fn extend_persistent_ttl(env: &Env, key: &DataKey) {
+    env.storage().persistent().extend_ttl(
+        key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 /// The vault token (e.g. USDC) this adapter routes, or `None` before
 /// `initialize`.
-///
-/// TODO(issue): implement.
-pub fn get_token(_env: &Env) -> Option<Address> {
-    unimplemented!("storage: get_token")
+pub fn get_token(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Token)
 }
 
 /// Persist `DataKey::Token`.
-///
-/// TODO(issue): implement.
-pub fn set_token(_env: &Env, _token: &Address) {
-    unimplemented!("storage: set_token")
+pub fn set_token(env: &Env, token: &Address) {
+    extend_instance_ttl(env);
+    env.storage().instance().set(&DataKey::Token, token);
 }
 
 /// The contract admin, or `None` before `initialize`.
-///
-/// TODO(issue): implement.
-pub fn get_admin(_env: &Env) -> Option<Address> {
-    unimplemented!("storage: get_admin")
+pub fn get_admin(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Admin)
 }
 
 /// Allocate and persist the next id for the given counter key
@@ -83,9 +78,25 @@ pub fn get_admin(_env: &Env) -> Option<Address> {
 /// Ids start at `1` (the counter reads `0` when absent, so the first
 /// allocation returns `1`). Mirrors `savings-vault::storage::next_id`.
 ///
-/// TODO(issue): implement.
-pub fn next_id(_env: &Env, _key: DataKey) -> u64 {
-    unimplemented!("storage: next_id")
+/// Errors `Error::Overflow` if the counter is already at `u64::MAX` (not
+/// reachable in practice, but the counter must never silently wrap and
+/// reuse an id).
+pub fn next_id(env: &Env, key: DataKey) -> Result<u64, Error> {
+    let current: u64 = env.storage().instance().get(&key).unwrap_or(0);
+    let next = current.checked_add(1).ok_or(Error::Overflow)?;
+    env.storage().instance().set(&key, &next);
+    Ok(next)
+}
+
+/// Read an `i128` instance-storage running total (`TotalShares`,
+/// `FeesAccrued`, `ReservedWithdrawAssets`), defaulting to `0` when absent.
+pub fn get_i128(env: &Env, key: &DataKey) -> i128 {
+    env.storage().instance().get(key).unwrap_or(0)
+}
+
+/// Persist an `i128` instance-storage running total.
+pub fn set_i128(env: &Env, key: &DataKey, value: i128) {
+    env.storage().instance().set(key, &value);
 }
 
 // --- SEP-41 token movement ---------------------------------------------------
@@ -99,20 +110,37 @@ pub fn next_id(_env: &Env, _key: DataKey) -> u64 {
 ///
 /// Errors `Error::InvalidAmount` if `amount <= 0`, `Error::NotInitialized`
 /// if the token has not been configured.
-///
-/// TODO(issue): implement.
-pub fn transfer_in(_env: &Env, _from: &Address, _amount: i128) -> Result<(), Error> {
-    unimplemented!("storage: transfer_in")
+pub fn transfer_in(env: &Env, from: &Address, amount: i128) -> Result<(), Error> {
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let token_address = get_token(env).ok_or(Error::NotInitialized)?;
+    token_client(env, &token_address).transfer(from, &env.current_contract_address(), &amount);
+    Ok(())
 }
 
 /// Move `amount` of the vault token from this contract out to `to`.
 ///
 /// Errors `Error::InvalidAmount` if `amount <= 0`, `Error::NotInitialized`
 /// if the token has not been configured.
-///
-/// TODO(issue): implement.
-pub fn transfer_out(_env: &Env, _to: &Address, _amount: i128) -> Result<(), Error> {
-    unimplemented!("storage: transfer_out")
+pub fn transfer_out(env: &Env, to: &Address, amount: i128) -> Result<(), Error> {
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let token_address = get_token(env).ok_or(Error::NotInitialized)?;
+    token_client(env, &token_address).transfer(&env.current_contract_address(), to, &amount);
+    Ok(())
+}
+
+/// The adapter's own idle (undeployed) vault-token balance. `0` before
+/// `initialize` (no token configured yet).
+pub fn idle_balance(env: &Env) -> i128 {
+    match get_token(env) {
+        Some(token_address) => {
+            token_client(env, &token_address).balance(&env.current_contract_address())
+        }
+        None => 0,
+    }
 }
 
 // Re-exported for modules that need a raw token client (e.g. `strategy`,
