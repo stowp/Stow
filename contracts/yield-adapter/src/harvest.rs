@@ -3,7 +3,9 @@
 
 use soroban_sdk::{Address, Env};
 
+use crate::admin;
 use crate::error::Error;
+use crate::types::DataKey;
 
 /// Report the active strategy's current yield and update accounting.
 ///
@@ -36,10 +38,25 @@ pub fn harvest(_env: &Env, _caller: Address) -> Result<i128, Error> {
 /// loss (or on a wash — yield that merely offsets a prior loss) would let
 /// the treasury extract value that was never actually earned, at
 /// depositors' expense.
-///
-/// TODO(issue): implement.
-pub fn apply_performance_fee(_env: &Env, _yield_amount: i128) -> Result<i128, Error> {
-    unimplemented!("harvest: apply_performance_fee")
+pub fn apply_performance_fee(env: &Env, yield_amount: i128) -> Result<i128, Error> {
+    let fee_bps = admin::performance_fee_bps(env) as i128;
+    let fee = yield_amount
+        .checked_mul(fee_bps)
+        .and_then(|v| v.checked_div(10_000))
+        .ok_or(Error::Overflow)?;
+    let remainder = yield_amount.checked_sub(fee).ok_or(Error::Overflow)?;
+
+    let accrued: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::FeesAccrued)
+        .unwrap_or(0);
+    let new_accrued = accrued.checked_add(fee).ok_or(Error::Overflow)?;
+    env.storage()
+        .instance()
+        .set(&DataKey::FeesAccrued, &new_accrued);
+
+    Ok(remainder)
 }
 
 /// Guard for `harvest`: errors `Error::HarvestTooSoon` if fewer than
@@ -47,8 +64,21 @@ pub fn apply_performance_fee(_env: &Env, _yield_amount: i128) -> Result<i128, Er
 /// `DataKey::LastHarvestAt`. Exists so a griefer can't spam `harvest` calls
 /// to burn the adapter's ledger-write budget; a legitimate keeper only needs
 /// to call it a few times a day at most.
-///
-/// TODO(issue): implement.
-pub fn check_harvest_interval(_env: &Env) -> Result<(), Error> {
-    unimplemented!("harvest: check_harvest_interval")
+pub fn check_harvest_interval(env: &Env) -> Result<(), Error> {
+    let interval = admin::harvest_interval(env);
+    if interval == 0 {
+        return Ok(());
+    }
+
+    let last_harvest_at: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::LastHarvestAt)
+        .unwrap_or(0);
+    let elapsed = env.ledger().timestamp().saturating_sub(last_harvest_at);
+    if elapsed < interval {
+        return Err(Error::HarvestTooSoon);
+    }
+
+    Ok(())
 }
