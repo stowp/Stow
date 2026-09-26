@@ -148,6 +148,68 @@ export class NotificationGeneratorService {
     }
   }
 
+  /**
+   * A queued withdrawal's cooldown elapsed and the funds are now claimable.
+   *
+   * Triggered off the indexed `withdraw_requested` records (or a scheduled
+   * sweep over them). A request is only notified once its `claimable_at` has
+   * passed. Idempotency is enforced by checking for an existing
+   * WithdrawalReady notification carrying the same `request_id`, so repeated
+   * sweeps never produce duplicate notifications for the same request.
+   */
+  async handleWithdrawalReady(data: {
+    requestId: string;
+    owner: string;
+    amount: string;
+    claimableAt: string | Date;
+  }): Promise<void> {
+    // --- 1. Only notify once the cooldown has actually elapsed --------------
+    const claimableAt = new Date(data.claimableAt);
+    if (Number.isNaN(claimableAt.getTime()) || claimableAt.getTime() > Date.now()) {
+      this.logger.debug(
+        `handleWithdrawalReady: request ${data.requestId} not yet claimable; skipping`,
+      );
+      return;
+    }
+
+    // --- 2. Idempotency: skip if we already notified for this request -------
+    const existing = await this.notificationsRepository.findOne({
+      where: {
+        type: NotificationType.WithdrawalReady,
+        data: { request_id: data.requestId } as any,
+      },
+    });
+    if (existing) {
+      this.logger.debug(
+        `handleWithdrawalReady: request ${data.requestId} already notified; skipping`,
+      );
+      return;
+    }
+
+    // --- 3. Resolve the user UUID from their Stellar address ----------------
+    const user = await this.userRepository.findOne({
+      where: { stellar_address: data.owner },
+    });
+
+    // --- 4. Create the notification, routing via user preferences when known -
+    await this.notificationsService.create(
+      data.owner,
+      NotificationType.WithdrawalReady,
+      'Withdrawal ready to claim! 💸',
+      `Your withdrawal of ${data.amount} stroops is now claimable. Come back and claim it.`,
+      {
+        request_id: data.requestId,
+        amount: data.amount,
+        claimable_at: claimableAt.toISOString(),
+      },
+      user?.id,
+    );
+
+    this.logger.log(
+      `handleWithdrawalReady: notification created for owner=${data.owner} request=${data.requestId}`,
+    );
+  }
+
   /** A locked savings plan passed its unlock time. */
   async handleLockUnlocked(_data: Record<string, unknown>): Promise<void> {
     // TODO(issue): notify the owner their locked funds are now withdrawable.
