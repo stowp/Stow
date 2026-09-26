@@ -27,12 +27,20 @@ import { ListGoalsDto } from './dto/list-goals.dto';
 import { ListLockedDto } from './dto/list-locked.dto';
 import { SavingsSummaryDto } from './dto/savings-summary.dto';
 import { YieldPositionResponseDto } from './dto/yield-position-response.dto';
-import { SavingsListQueryDto } from './dto/pagination.dto';
+import { SavingsAddressListQueryDto } from './dto/savings-list-query.dto';
+import { SavingsAddressParamDto } from './dto/stellar-address.dto';
 import { SavingsService } from './savings.service';
 import { User } from '../users/entities/user.entity';
 
 @ApiTags('savings')
 @Controller('savings')
+@UsePipes(
+  new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+  }),
+)
 export class SavingsController {
   constructor(
     private readonly savingsService: SavingsService,
@@ -59,15 +67,12 @@ export class SavingsController {
    *
    * Lists an address's goals with progress (target/current amount, status),
    * paginated. `page`/`limit`/`sort` are validated and capped via
-   * `SavingsListQueryDto` — an invalid value (non-integer, `page < 1`,
+  * `SavingsAddressListQueryDto` — an invalid value (non-integer, `page < 1`,
    * `limit` outside 1-100, or a `sort` other than `asc`/`desc`) is rejected
    * with a 400 rather than silently coerced.
    */
   @Get('goals')
   @Public()
-  @UsePipes(
-    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: false }),
-  )
   @ApiOperation({ summary: "List an address's savings goals with progress" })
   @ApiQuery({ name: 'address', required: true, type: String })
   @ApiResponse({
@@ -80,8 +85,7 @@ export class SavingsController {
     description: 'Invalid page, limit, or sort value',
   })
   async listGoals(
-    @Query('address') address: string,
-    @Query() query: SavingsListQueryDto,
+    @Query() query: SavingsAddressListQueryDto,
   ): Promise<ListGoalsDto> {
     const {
       data,
@@ -89,12 +93,12 @@ export class SavingsController {
       page: p,
       limit: l,
     } = await this.goalsService.listByOwnerPaginated(
-      address,
+      query.address,
       query.page,
       query.limit,
       query.sort,
     );
-    return { address, goals: data, total, page: p, limit: l };
+    return { address: query.address, goals: data, total, page: p, limit: l };
   }
 
   /**
@@ -106,9 +110,6 @@ export class SavingsController {
    */
   @Get('locked')
   @Public()
-  @UsePipes(
-    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: false }),
-  )
   @ApiOperation({ summary: "List an address's locked savings plans" })
   @ApiQuery({ name: 'address', required: true, type: String })
   @ApiResponse({
@@ -122,8 +123,7 @@ export class SavingsController {
     description: 'Invalid page, limit, or sort value',
   })
   async listLocked(
-    @Query('address') address: string,
-    @Query() query: SavingsListQueryDto,
+    @Query() query: SavingsAddressListQueryDto,
   ): Promise<ListLockedDto> {
     const {
       data,
@@ -131,12 +131,12 @@ export class SavingsController {
       page: p,
       limit: l,
     } = await this.lockedPlansService.listByOwner(
-      address,
+      query.address,
       query.page,
       query.limit,
       query.sort,
     );
-    return { address, plans: data, total, page: p, limit: l };
+    return { address: query.address, plans: data, total, page: p, limit: l };
   }
 
   /**
@@ -158,7 +158,8 @@ export class SavingsController {
     status: 404,
     description: 'No account exists for this address',
   })
-  async getAccount(@Param('address') address: string) {
+  async getAccount(@Param() params: SavingsAddressParamDto) {
+    const { address } = params;
     const account = await this.balanceService.findAccount(address);
     if (!account) {
       throw new NotFoundException(

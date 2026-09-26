@@ -62,7 +62,8 @@ describe('SavingsController', () => {
         limit: 20,
       });
 
-      const result = await controller.listGoals('GADDR', {
+      const result = await controller.listGoals({
+        address: 'GADDR',
         page: 1,
         limit: 20,
       });
@@ -99,7 +100,12 @@ describe('SavingsController', () => {
         limit: 5,
       });
 
-      await controller.listGoals('GADDR', { page: 2, limit: 5, sort: 'asc' });
+      await controller.listGoals({
+        address: 'GADDR',
+        page: 2,
+        limit: 5,
+        sort: 'asc',
+      });
 
       expect(goalsService.listByOwnerPaginated).toHaveBeenCalledWith(
         'GADDR',
@@ -126,7 +132,8 @@ describe('SavingsController', () => {
         limit: 20,
       });
 
-      const result = await controller.listLocked('GADDR', {
+      const result = await controller.listLocked({
+        address: 'GADDR',
         page: 1,
         limit: 20,
       });
@@ -161,7 +168,8 @@ describe('SavingsController', () => {
         limit: 20,
       });
 
-      await controller.listLocked('GADDR', {
+      await controller.listLocked({
+        address: 'GADDR',
         page: 1,
         limit: 20,
         sort: 'desc',
@@ -187,7 +195,7 @@ describe('SavingsController', () => {
         updated_at: updated,
       });
 
-      const result = await controller.getAccount('GADDR');
+      const result = await controller.getAccount({ address: 'GADDR' });
 
       expect(balanceService.findAccount).toHaveBeenCalledWith('GADDR');
       expect(result).toEqual({
@@ -201,9 +209,9 @@ describe('SavingsController', () => {
     it('throws NotFoundException for an unknown address', async () => {
       balanceService.findAccount.mockResolvedValue(null);
 
-      await expect(controller.getAccount('GUNKNOWN')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        controller.getAccount({ address: 'GUNKNOWN' }),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

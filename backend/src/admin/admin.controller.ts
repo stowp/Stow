@@ -23,6 +23,7 @@ import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { ListVerifiedAddressesQueryDto } from './dto/list-verified-addresses-query.dto';
 import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { SavingsOverviewDto } from './dto/savings-overview.dto';
+import { AdminAuditInterceptor } from './interceptors/admin-audit.interceptor';
 
 type RequestUser = Request & { user: { id: string } };
 
@@ -52,6 +53,7 @@ export class AdminController {
 
   @Get('savings/overview')
   @Roles(Role.Admin, Role.Moderator)
+  @UseInterceptors(AdminAuditInterceptor)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Aggregate savings metrics (deposits, accounts, status breakdown)' })
   @ApiResponse({
