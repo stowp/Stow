@@ -32,6 +32,8 @@ export class IndexerService implements OnModuleInit {
   private isRunning = false;
   private startTime: number = Date.now();
   private eventsProcessed = 0;
+  private depositsProcessed = 0;
+  private withdrawalsProcessed = 0;
   private lastProcessedAt = Date.now();
   private eventTimestamps: number[] = [];
 
@@ -150,7 +152,7 @@ export class IndexerService implements OnModuleInit {
       await this.decodeAndApply(event);
       event.status = ContractEventStatus.PROCESSED;
       await this.contractEventRepository.save(event);
-      this.recordProcessed();
+      this.recordProcessed(event.event_type);
     } catch (err) {
       event.retry_count = (event.retry_count ?? 0) + 1;
       event.status =
@@ -308,7 +310,7 @@ export class IndexerService implements OnModuleInit {
   }
 
   async getMetrics(): Promise<IndexerMetricsDto> {
-    const [pending, failed, dlq, total] = await Promise.all([
+    const [pending, failed, dlq] = await Promise.all([
       this.contractEventRepository.count({
         where: { status: ContractEventStatus.PENDING },
       }),
@@ -318,14 +320,15 @@ export class IndexerService implements OnModuleInit {
       this.contractEventRepository.count({
         where: { status: ContractEventStatus.DLQ },
       }),
-      this.contractEventRepository.count(),
     ]);
     const lastLedger = await this.getCheckpoint(CHECKPOINT_LEDGER_KEY);
     const latestLedger = await this.getCheckpoint(CHECKPOINT_LEDGER_KEY_LATEST);
     return {
       events_per_second: this.getEventsProcessedPerMinute() / 60,
       lag_in_ledgers: Math.max(latestLedger - lastLedger, 0),
-      total_events_processed: total,
+      total_events_processed: this.eventsProcessed,
+      deposits_processed: this.depositsProcessed,
+      withdrawals_processed: this.withdrawalsProcessed,
       pending_events: pending,
       failed_events: failed,
       dlq_events: dlq,
@@ -357,8 +360,10 @@ export class IndexerService implements OnModuleInit {
     await this.checkpointRepository.save({ key, value });
   }
 
-  private recordProcessed(): void {
+  private recordProcessed(eventType: string): void {
     this.eventsProcessed += 1;
+    if (eventType === 'deposit') this.depositsProcessed += 1;
+    if (eventType === 'withdraw') this.withdrawalsProcessed += 1;
     this.lastProcessedAt = Date.now();
     this.eventTimestamps.push(this.lastProcessedAt);
   }

@@ -183,6 +183,14 @@ describe('IndexerService', () => {
         key: CHECKPOINT_LEDGER_KEY,
         value: 15,
       });
+
+      await expect(service.getMetrics()).resolves.toEqual(
+        expect.objectContaining({
+          total_events_processed: 2,
+          deposits_processed: 1,
+          withdrawals_processed: 1,
+        }),
+      );
     });
 
     it('advances checkpoint safely when range is empty', async () => {
