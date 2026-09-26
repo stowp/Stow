@@ -221,4 +221,42 @@ export class SavingsController {
   ): Promise<YieldPositionResponseDto> {
     return this.savingsService.getYieldPosition(user.stellar_address);
   }
+
+  /**
+   * GET /savings/yield/rate?window=
+   *
+   * Returns the yield adapter's current exchange rate (assets per share)
+   * plus a trailing-window APR derived from harvest history. `window`
+   * optionally overrides the trailing window in days (defaults to 30).
+   * Public so the frontend APR display can be built directly against it.
+   */
+  @Get('yield/rate')
+  @Public()
+  @ApiOperation({
+    summary: "Get the yield adapter's exchange rate and trailing APR",
+  })
+  @ApiQuery({
+    name: 'window',
+    required: false,
+    type: Number,
+    description: 'Trailing window in days (defaults to 30)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Current exchange rate and trailing-window APR',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid window value',
+  })
+  async getYieldRate(@Query('window') window?: string) {
+    let windowDays: number | undefined;
+    if (window !== undefined) {
+      windowDays = Number(window);
+      if (!Number.isFinite(windowDays) || windowDays <= 0) {
+        throw new BadRequestException('window must be a positive number of days');
+      }
+    }
+    return this.balanceService.getYieldRate(windowDays);
+  }
 }
