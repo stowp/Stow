@@ -80,6 +80,74 @@ export class NotificationGeneratorService {
     );
   }
 
+  /**
+   * A harvest credited yield to the pool's depositors.
+   *
+   * Triggered off the indexed `harvested` event. Each depositor is notified
+   * only when the harvest produced a positive yield and they have opted in to
+   * `yield_earned_notifications` (independent of other savings notifications).
+   * The credited amount is proportioned to the depositor's share of the pool
+   * at harvest time.
+   */
+  async handleHarvested(data: {
+    poolId: string;
+    totalYield: string;
+    depositors: Array<{ address: string; share: number }>;
+  }): Promise<void> {
+    // --- 1. A loss (or zero) harvest yields no notification -----------------
+    const totalYield = BigInt(data.totalYield);
+    if (totalYield <= 0n) {
+      this.logger.debug(
+        `handleHarvested: pool ${data.poolId} produced no yield; skipping`,
+      );
+      return;
+    }
+
+    // --- 2. Notify each depositor, proportioned to their pool share ---------
+    for (const depositor of data.depositors) {
+      const user = await this.userRepository.findOne({
+        where: { stellar_address: depositor.address },
+      });
+
+      // Respect the yield_earned_notifications opt-out preference.
+      if (user) {
+        const prefs = await this.userPreferencesRepository.findOne({
+          where: { userId: user.id },
+        });
+        if (prefs && !prefs.yield_earned_notifications) {
+          this.logger.debug(
+            `handleHarvested: user ${user.id} has opted out of yield_earned notifications; skipping`,
+          );
+          continue;
+        }
+      }
+
+      // Proportion the yield to the depositor's share at harvest time.
+      const earned = (totalYield * BigInt(Math.round(depositor.share * 1e6))) / 1_000_000n;
+      if (earned <= 0n) {
+        continue;
+      }
+
+      await this.notificationsService.create(
+        depositor.address,
+        NotificationType.YieldEarned,
+        'Yield earned! 🌱',
+        `Your share of the harvest credited ${earned.toString()} stroops of yield.`,
+        {
+          pool_id: data.poolId,
+          total_yield: data.totalYield,
+          share: depositor.share,
+          earned: earned.toString(),
+        },
+        user?.id,
+      );
+
+      this.logger.log(
+        `handleHarvested: notification created for owner=${depositor.address} pool=${data.poolId}`,
+      );
+    }
+  }
+
   /** A locked savings plan passed its unlock time. */
   async handleLockUnlocked(_data: Record<string, unknown>): Promise<void> {
     // TODO(issue): notify the owner their locked funds are now withdrawable.
