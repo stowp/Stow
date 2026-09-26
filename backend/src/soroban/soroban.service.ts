@@ -74,6 +74,87 @@ export interface SorobanFinalizeEventResult {
   tx_hash: string;
 }
 
+/** Default maximum attempts for a retried RPC call (1 initial + 2 retries). */
+const DEFAULT_RPC_RETRY_MAX_ATTEMPTS = 3;
+
+/**
+ * Default base delay in milliseconds for exponential backoff between RPC
+ * retry attempts. Delay formula: baseDelay * 4^attempt → 500 ms, 2 s, 8 s.
+ */
+const DEFAULT_RPC_RETRY_BASE_DELAY_MS = 500;
+
+/**
+ * Jitter factor: each computed delay is randomised by ±20% to avoid
+ * thundering-herd retries when multiple RPC calls fail simultaneously.
+ */
+const RPC_RETRY_JITTER_FACTOR = 0.2;
+
+/**
+ * Number of consecutive RPC failures (after retries are exhausted) before
+ * the Soroban RPC connection is considered persistently unhealthy.
+ */
+const RPC_UNHEALTHY_FAILURE_THRESHOLD = 3;
+
+/**
+ * Returns true when the error looks like a transient RPC/network failure
+ * (connection reset, timeout, DNS failure, HTTP 5xx/429) as opposed to a
+ * permanent one (bad request, simulation/contract error). Only transient
+ * errors are worth retrying — retrying a contract logic error just wastes
+ * time and delays surfacing a real bug to the caller.
+ */
+export function isTransientRpcError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  // Node's built-in fetch surfaces network-layer failures as TypeErrors
+  // (e.g. "fetch failed", "terminated", "network socket disconnected").
+  if (error instanceof TypeError) return true;
+
+  // Abort/timeout signals (AbortController-driven timeouts).
+  if (error.name === 'AbortError') return true;
+
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause && typeof cause === 'object') {
+    const code = (cause as { code?: unknown }).code;
+    if (
+      typeof code === 'string' &&
+      [
+        'ECONNRESET',
+        'ECONNREFUSED',
+        'ETIMEDOUT',
+        'ENOTFOUND',
+        'EPIPE',
+        'EHOSTUNREACH',
+        'EAI_AGAIN',
+      ].includes(code)
+    ) {
+      return true;
+    }
+  }
+
+  // HTTP-level transient errors surfaced with a "HTTP <status>" message.
+  const httpMatch = /HTTP (\d{3})/.exec(error.message);
+  if (httpMatch) {
+    const status = parseInt(httpMatch[1], 10);
+    return status === 429 || (status >= 500 && status <= 599);
+  }
+
+  return false;
+}
+
+/**
+ * Computes the delay before retry attempt `attemptIndex` (0-based).
+ * Formula: baseDelayMs * 4^attemptIndex, jittered by ±RPC_RETRY_JITTER_FACTOR.
+ */
+export function computeRpcBackoffDelay(
+  baseDelayMs: number,
+  attemptIndex: number,
+): number {
+  const exponential = baseDelayMs * Math.pow(4, attemptIndex);
+  const jitter =
+    exponential * RPC_RETRY_JITTER_FACTOR * (Math.random() * 2 - 1);
+  return Math.max(0, Math.round(exponential + jitter));
+}
+
 @Injectable()
 export class SorobanService {
   private readonly logger = new Logger(SorobanService.name);
@@ -83,6 +164,8 @@ export class SorobanService {
   private readonly serverSecretKey: string;
   private readonly rpcUrl: string;
   private readonly rpcServer: SorobanRpc.Server;
+  /** Consecutive RPC failures since the last success, used by `isRpcHealthy`. */
+  private consecutiveRpcFailures = 0;
 
   constructor(private readonly configService: ConfigService) {
     this.contractId =
@@ -124,9 +207,25 @@ export class SorobanService {
 
   async testConnection(): Promise<boolean> {
     return this.withSorobanErrorHandling('testConnection', async () => {
-      await this.rpcServer.getHealth();
+      await this.withRetry('testConnection', () => this.rpcServer.getHealth());
       return true;
     });
+  }
+
+  /**
+   * Reports whether the Soroban RPC connection is currently considered
+   * healthy, based on consecutive failures observed by `withRetry` (i.e.
+   * retries were exhausted `RPC_UNHEALTHY_FAILURE_THRESHOLD` times in a
+   * row without an intervening success). Intended for health-check
+   * endpoints to surface persistent RPC failure without throwing.
+   */
+  isRpcHealthy(): boolean {
+    return this.consecutiveRpcFailures < RPC_UNHEALTHY_FAILURE_THRESHOLD;
+  }
+
+  /** Number of consecutive RPC failures observed since the last success. */
+  getConsecutiveRpcFailures(): number {
+    return this.consecutiveRpcFailures;
   }
 
   async createMarket(
@@ -924,31 +1023,32 @@ export class SorobanService {
       };
 
       try {
-        const response = await fetch(this.rpcUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 'stow-getEvents',
-            method: 'getEvents',
-            params,
-          }),
+        body = await this.withRetry('getEvents', async () => {
+          const response = await fetch(this.rpcUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 'stow-getEvents',
+              method: 'getEvents',
+              params,
+            }),
+          });
+
+          if (!response.ok) {
+            // Thrown so `withRetry`/`isTransientRpcError` can classify and
+            // retry transient statuses (5xx/429) with backoff.
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          return (await response.json()) as typeof body;
         });
-
-        if (!response.ok) {
-          // HTTP-level error — log and break so the caller keeps the
-          // checkpoint at the last successfully retrieved cursor.
-          this.logger.error(
-            `getEvents RPC HTTP error: ${response.status} (cursor=${activeCursor ?? 'none'}, fromLedger=${fromLedger})`,
-          );
-          break;
-        }
-
-        body = (await response.json()) as typeof body;
       } catch (fetchError) {
-        // Network-level error — same safe-exit strategy.
+        // Retries (if any) are exhausted, or the failure was permanent —
+        // log and break so the caller keeps the checkpoint at the last
+        // successfully retrieved cursor and can resume from there.
         this.logger.error(
-          `getEvents fetch failed: ${(fetchError as Error).message} (cursor=${activeCursor ?? 'none'}, fromLedger=${fromLedger})`,
+          `getEvents RPC failed: ${(fetchError as Error).message} (cursor=${activeCursor ?? 'none'}, fromLedger=${fromLedger})`,
         );
         break;
       }
@@ -1028,6 +1128,71 @@ export class SorobanService {
       this.logger.error(`Soroban ${operation} failed: ${message}`);
       throw error;
     }
+  }
+
+  /**
+   * Wraps an RPC call with bounded retries and exponential backoff + jitter.
+   *
+   * - Max attempts: SOROBAN_RPC_MAX_RETRIES (default 3)
+   * - Delay formula: SOROBAN_RPC_RETRY_BASE_DELAY_MS * 4^attemptIndex →
+   *   500 ms, 2 s, 8 s by default
+   * - Jitter: ±20% of the computed delay
+   * - Only transient errors (network failures, HTTP 5xx/429) are retried;
+   *   permanent errors (e.g. simulation/contract errors) throw immediately.
+   * - Tracks consecutive failures so `isRpcHealthy()` can surface a
+   *   persistent outage to health checks without throwing.
+   */
+  private async withRetry<T>(
+    operation: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const maxAttempts = Number(
+      this.configService.get<string>('SOROBAN_RPC_MAX_RETRIES') ??
+        DEFAULT_RPC_RETRY_MAX_ATTEMPTS,
+    );
+    const baseDelayMs = Number(
+      this.configService.get<string>('SOROBAN_RPC_RETRY_BASE_DELAY_MS') ??
+        DEFAULT_RPC_RETRY_BASE_DELAY_MS,
+    );
+
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const result = await fn();
+        this.consecutiveRpcFailures = 0;
+        return result;
+      } catch (error) {
+        lastError = error;
+
+        if (!isTransientRpcError(error)) {
+          // Permanent failure — do not retry, do not count toward the
+          // persistent-outage threshold (it isn't an RPC connectivity issue).
+          throw error;
+        }
+
+        const attemptsRemaining = maxAttempts - attempt - 1;
+        if (attemptsRemaining === 0) {
+          break; // exhausted — record failure and throw below
+        }
+
+        const delayMs = computeRpcBackoffDelay(baseDelayMs, attempt);
+        this.logger.warn(
+          `Transient RPC failure during ${operation} — attempt ${attempt + 1}/${maxAttempts}, ` +
+            `retrying in ${delayMs} ms: ${error instanceof Error ? error.message : String(error)}`,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    this.consecutiveRpcFailures += 1;
+    this.logger.error(
+      `RPC ${operation} failed after ${maxAttempts} attempt(s) ` +
+        `(${this.consecutiveRpcFailures} consecutive failures): ` +
+        `${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    );
+    throw lastError;
   }
 
   private normalizeEvent(rawEvent: unknown): SorobanRpcEvent | null {
