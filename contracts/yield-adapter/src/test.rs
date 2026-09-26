@@ -142,9 +142,80 @@ fn claim_before_cooldown_elapsed_rejected() {
 }
 
 #[test]
-#[ignore = "TODO(issue): implement withdraw::cancel_withdraw"]
 fn cancel_withdraw_returns_shares_to_owner() {
-    todo!("request_withdraw, cancel_withdraw, assert position shares restored");
+    use crate::types::{DataKey, Position, WithdrawRequest};
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury, token) = setup_with_token(&env);
+    let owner = Address::generate(&env);
+    let request_id = 1u64;
+    let now = env.ledger().timestamp();
+
+    // `request_withdraw` is a separate, still-unimplemented issue (see
+    // `withdraw_round_trip_returns_correct_assets`), so seed the state it
+    // would have left behind directly: an owner position already debited by
+    // the 400 shares burned at request time, a matching `WithdrawRequest`
+    // whose `shares` field holds the asset amount fixed at that moment (per
+    // `request_withdraw`'s doc comment), and a vault-wide `TotalShares` net
+    // of that burn.
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::TotalShares, &600i128);
+        env.storage().persistent().set(
+            &DataKey::Position(owner.clone()),
+            &Position {
+                owner: owner.clone(),
+                shares: 600,
+                created_at: now,
+                updated_at: now,
+            },
+        );
+        env.storage().persistent().set(
+            &DataKey::WithdrawRequest(request_id),
+            &WithdrawRequest {
+                id: request_id,
+                owner: owner.clone(),
+                shares: 400,
+                claimable_at: now,
+                requested_at: now,
+                claimed_at: None,
+                cancelled_at: None,
+            },
+        );
+    });
+
+    // The vault holds 600 idle tokens against the 600 shares seeded above —
+    // a 1:1 exchange rate — so re-minting the request's fixed 400-asset
+    // amount should hand back exactly 400 shares.
+    soroban_sdk::token::StellarAssetClient::new(&env, &token).mint(&client.address, &600);
+
+    client.cancel_withdraw(&owner, &request_id);
+
+    let position: Position = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Position(owner.clone()))
+            .unwrap()
+    });
+    assert_eq!(
+        position.shares, 1000,
+        "the 400 re-minted shares must be added back to the owner's existing 600"
+    );
+    assert_eq!(client.total_shares(), 1000);
+
+    let request: WithdrawRequest = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::WithdrawRequest(request_id))
+            .unwrap()
+    });
+    assert!(request.cancelled_at.is_some());
+
+    // The request is now resolved — cancelling it again (standing in for a
+    // later claim attempt, since `claim_withdraw` checks the same flag) must
+    // reject rather than re-mint a second time.
+    let result = client.try_cancel_withdraw(&owner, &request_id);
+    assert_eq!(result, Err(Ok(Error::WithdrawAlreadyResolved)));
 }
 
 #[test]
