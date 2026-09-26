@@ -88,10 +88,7 @@ pub fn cancel_withdraw(env: &Env, owner: Address, request_id: u64) -> Result<(),
         .persistent()
         .get(&position_key)
         .ok_or(Error::NotFound)?;
-    position.shares = position
-        .shares
-        .checked_add(shares)
-        .ok_or(Error::Overflow)?;
+    position.shares = position.shares.checked_add(shares).ok_or(Error::Overflow)?;
     position.updated_at = env.ledger().timestamp();
 
     let total_shares = accounting::total_shares(env);

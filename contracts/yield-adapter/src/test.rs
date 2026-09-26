@@ -160,7 +160,9 @@ fn cancel_withdraw_returns_shares_to_owner() {
     // `request_withdraw`'s doc comment), and a vault-wide `TotalShares` net
     // of that burn.
     env.as_contract(&client.address, || {
-        env.storage().instance().set(&DataKey::TotalShares, &600i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalShares, &600i128);
         env.storage().persistent().set(
             &DataKey::Position(owner.clone()),
             &Position {
@@ -716,16 +718,16 @@ fn convert_to_shares_first_deposit_one_to_one() {
     // Mock total_shares() returning 0 (first deposit scenario)
     // Since total_shares is unimplemented, we'll test the logic directly
     // by ensuring the function handles the first-deposit case correctly
-    
+
     // For this test, we need to manually verify the logic:
     // When total_shares == 0, convert_to_shares should return assets as-is
-    
+
     // Note: This test will work once total_shares() and total_assets() are implemented.
     // For now, it demonstrates the expected behavior.
-    
+
     // Test case 1: First deposit of 1000 assets should mint 1000 shares
     let assets = 1000i128;
-    
+
     // This will fail until total_shares() is implemented, but shows the intent
     // Uncomment when total_shares and total_assets are implemented:
     // let shares = convert_to_shares(&env, assets).unwrap();
@@ -739,14 +741,14 @@ fn convert_to_shares_subsequent_deposit_proportional() {
     let env = Env::default();
 
     // Test subsequent deposits with a moved exchange rate
-    // Scenario: 
+    // Scenario:
     // - Initial state: 1000 shares backed by 1200 assets (exchange rate = 1.2 assets/share)
     // - Depositor brings 600 new assets
     // - Expected shares = (600 * 1000) / 1200 = 500 shares
-    
+
     // Note: This test will work once total_shares() and total_assets() are implemented
     // For now, it demonstrates the expected behavior
-    
+
     // Uncomment when total_shares and total_assets are implemented:
     // Mock the state to have total_shares = 1000, total_assets = 1200
     // let assets_to_deposit = 600i128;
@@ -765,9 +767,9 @@ fn convert_to_shares_rounds_down() {
     // - 1000 shares backed by 1001 assets
     // - Depositor brings 10 assets
     // - Expected: (10 * 1000) / 1001 = 9.99... → rounds down to 9 shares
-    
+
     // Note: This test will work once total_shares() and total_assets() are implemented
-    
+
     // Uncomment when total_shares and total_assets are implemented:
     // Mock state: total_shares = 1000, total_assets = 1001
     // let assets_to_deposit = 10i128;
@@ -784,10 +786,18 @@ fn convert_to_shares_rejects_zero_amount() {
 
     // Test that zero or negative amounts are rejected
     let result = convert_to_shares(&env, 0);
-    assert_eq!(result, Err(Error::InvalidAmount), "Should reject zero amount");
+    assert_eq!(
+        result,
+        Err(Error::InvalidAmount),
+        "Should reject zero amount"
+    );
 
     let result = convert_to_shares(&env, -100);
-    assert_eq!(result, Err(Error::InvalidAmount), "Should reject negative amount");
+    assert_eq!(
+        result,
+        Err(Error::InvalidAmount),
+        "Should reject negative amount"
+    );
 }
 
 #[test]
@@ -799,7 +809,7 @@ fn convert_to_shares_handles_overflow() {
 
     // Test overflow protection
     // Note: This requires mocking total_shares and total_assets to trigger overflow
-    
+
     // Uncomment when total_shares and total_assets are implemented:
     // Mock state with very large values that would cause overflow
     // let huge_assets = i128::MAX;
@@ -825,7 +835,7 @@ fn convert_to_assets_at_moved_exchange_rate() {
     // - Expected: (500 * 1200) / 1000 = 600 assets
 
     // Note: This test will work once total_shares() and total_assets() are implemented
-    
+
     // Uncomment when total_shares and total_assets are implemented:
     // Mock state: total_shares = 1000, total_assets = 1200
     // let shares_to_convert = 500i128;
@@ -844,9 +854,9 @@ fn convert_to_assets_rounds_down() {
     // - 1000 shares backing 1001 assets
     // - Convert 10 shares to assets
     // - Expected: (10 * 1001) / 1000 = 10.01 → rounds down to 10 assets
-    
+
     // Note: This test will work once total_shares() and total_assets() are implemented
-    
+
     // Uncomment when total_shares and total_assets are implemented:
     // Mock state: total_shares = 1000, total_assets = 1001
     // let shares_to_convert = 10i128;
@@ -863,10 +873,18 @@ fn convert_to_assets_rejects_zero_shares() {
 
     // Test that zero or negative shares are rejected
     let result = convert_to_assets(&env, 0);
-    assert_eq!(result, Err(Error::InvalidAmount), "Should reject zero shares");
+    assert_eq!(
+        result,
+        Err(Error::InvalidAmount),
+        "Should reject zero shares"
+    );
 
     let result = convert_to_assets(&env, -100);
-    assert_eq!(result, Err(Error::InvalidAmount), "Should reject negative shares");
+    assert_eq!(
+        result,
+        Err(Error::InvalidAmount),
+        "Should reject negative shares"
+    );
 }
 
 #[test]
@@ -878,7 +896,7 @@ fn convert_to_assets_handles_no_shares_outstanding() {
 
     // Test that conversion fails when no shares exist in the system
     // Note: This requires total_shares() to return 0
-    
+
     // Uncomment when total_shares is implemented:
     // Mock state: total_shares = 0
     // let result = convert_to_assets(&env, 100);
@@ -893,7 +911,7 @@ fn convert_to_assets_handles_zero_vault_value() {
 
     // Test edge case: shares exist but vault value is zero (total loss scenario)
     // Expected: returns 0 assets (shares are worthless)
-    
+
     // Uncomment when total_shares and total_assets are implemented:
     // Mock state: total_shares = 1000, total_assets = 0
     // let shares_to_convert = 100i128;
@@ -910,7 +928,7 @@ fn convert_to_assets_handles_overflow() {
 
     // Test overflow protection
     // Note: This requires mocking total_shares and total_assets to trigger overflow
-    
+
     // Uncomment when total_shares and total_assets are implemented:
     // Mock state with very large values that would cause overflow
     // let huge_shares = i128::MAX;
@@ -927,28 +945,28 @@ fn round_trip_conversion_never_extracts_value() {
 
     // Test that depositing and immediately withdrawing never extracts more value
     // than was deposited (due to both conversions rounding down)
-    // 
+    //
     // Scenario:
     // - Vault state: 1000 shares backing 1003 assets (slight appreciation)
     // - Deposit 100 assets
     // - Convert to shares: (100 * 1000) / 1003 = 99.7... → 99 shares (rounds down)
     // - Immediately convert back: (99 * 1003) / 1000 = 99.297 → 99 assets (rounds down)
     // - Net: deposited 100, got 99 shares, withdrew 99 assets → lost 1 asset (good)
-    
+
     // Note: This test will work once total_shares() and total_assets() are implemented
-    
+
     // Uncomment when total_shares and total_assets are implemented:
     // Mock state: total_shares = 1000, total_assets = 1003
     // let deposit_amount = 100i128;
-    // 
+    //
     // let shares_minted = convert_to_shares(&env, deposit_amount).unwrap();
     // assert!(shares_minted <= deposit_amount, "Should mint at most 100 shares");
-    // 
+    //
     // // Note: After minting, total_shares would be 1099, total_assets would be 1103
     // // For this test to be accurate, we'd need to update the mocked state
-    // 
+    //
     // let assets_withdrawn = convert_to_assets(&env, shares_minted).unwrap();
-    // assert!(assets_withdrawn <= deposit_amount, 
+    // assert!(assets_withdrawn <= deposit_amount,
     //     "Round-trip should never extract more assets than deposited");
 }
 
@@ -987,7 +1005,7 @@ fn exchange_rate_returns_zero_zero_after_initialize() {
 
     // After initialization but before any deposits
     // Note: This requires initialize() to be implemented
-    
+
     // Uncomment when initialize is implemented:
     // let (client, _admin, _treasury, _token) = setup_with_token(&env);
     // let (assets, shares) = exchange_rate(&env);
@@ -1003,7 +1021,9 @@ fn total_shares_reflects_running_total() {
     let env = Env::default();
 
     // Manually set TotalShares to test the read
-    env.storage().instance().set(&DataKey::TotalShares, &1000i128);
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalShares, &1000i128);
 
     let shares = total_shares(&env);
     assert_eq!(shares, 1000, "total_shares should reflect stored value");
@@ -1018,14 +1038,14 @@ fn total_assets_includes_idle_balance() {
 
     // Note: This test requires a token to be set and the contract to have a balance
     // Full test requires initialize() and token setup
-    
+
     // Uncomment when initialize and token setup are available:
     // let (client, _admin, _treasury, token) = setup_with_token(&env);
-    // 
+    //
     // // Mint some tokens to the contract
     // let token_client = token::Client::new(&env, &token);
     // token_client.mint(&env.current_contract_address(), &5000);
-    // 
+    //
     // let assets = total_assets(&env);
     // assert_eq!(assets, 5000, "total_assets should equal idle balance when no strategy is active");
 }
@@ -1042,18 +1062,18 @@ fn total_assets_includes_strategy_deployed_balance() {
     // 1. A mock strategy contract that implements balance(of: Address) -> i128
     // 2. initialize() to be implemented
     // 3. register_strategy() and set_active_strategy() to be implemented
-    
+
     // Uncomment when dependencies are implemented:
     // let (client, _admin, _treasury, token) = setup_with_token(&env);
-    // 
+    //
     // // Create and register a mock strategy
     // let mock_strategy = Address::generate(&env);
     // // Mock the strategy's balance() call to return 3000
-    // 
+    //
     // // Set up: 2000 idle + 3000 in strategy = 5000 total
     // let token_client = token::Client::new(&env, &token);
     // token_client.mint(&env.current_contract_address(), &2000);
-    // 
+    //
     // let assets = total_assets(&env);
     // assert_eq!(assets, 5000, "total_assets should be idle + strategy deployed");
 }
@@ -1067,18 +1087,18 @@ fn exchange_rate_after_first_deposit() {
 
     // After first deposit, exchange_rate should reflect the deposit
     // Expected: if 1000 assets deposited → 1000 shares minted → rate (1000, 1000)
-    
+
     // Note: This requires initialize() and deposit() to be implemented
-    
+
     // Uncomment when dependencies are implemented:
     // let (client, _admin, _treasury, token) = setup_with_token(&env);
     // let user = Address::generate(&env);
-    // 
+    //
     // // Mint tokens to user and deposit
     // let token_client = token::Client::new(&env, &token);
     // token_client.mint(&user, &1000);
     // client.deposit(&user, &1000);
-    // 
+    //
     // let (assets, shares) = exchange_rate(&env);
     // assert_eq!(assets, 1000, "total_assets should equal first deposit");
     // assert_eq!(shares, 1000, "total_shares should equal first deposit (1:1)");
@@ -1096,25 +1116,25 @@ fn exchange_rate_moves_after_yield() {
     // - Initial: 1000 shares backing 1000 assets (rate = 1.0)
     // - Strategy earns 200 yield
     // - After harvest: 1000 shares backing 1200 assets (rate = 1.2)
-    
+
     // Note: This requires initialize(), deposit(), harvest(), and a mock strategy
-    
+
     // Uncomment when dependencies are implemented:
     // let (client, _admin, _treasury, token) = setup_with_token(&env);
     // let user = Address::generate(&env);
-    // 
+    //
     // // Initial deposit
     // let token_client = token::Client::new(&env, &token);
     // token_client.mint(&user, &1000);
     // client.deposit(&user, &1000);
-    // 
+    //
     // // Simulate yield: mock strategy now reports 1200 balance
     // // Call harvest to update exchange rate
-    // 
+    //
     // let (assets, shares) = exchange_rate(&env);
     // assert_eq!(assets, 1200, "total_assets should include yield");
     // assert_eq!(shares, 1000, "total_shares unchanged (no new deposits)");
-    // 
+    //
     // // Exchange rate = 1200 / 1000 = 1.2 assets per share
 }
 
@@ -1127,15 +1147,15 @@ fn total_assets_handles_strategy_query_failure() {
 
     // If the strategy's balance() call fails, total_assets should fall back to idle balance
     // Note: This requires setting up a strategy that fails on balance() call
-    
+
     // Uncomment when dependencies are implemented:
     // let (client, _admin, _treasury, token) = setup_with_token(&env);
-    // 
+    //
     // // Set up a strategy that panics on balance() call
     // // Set idle balance to 500
     // let token_client = token::Client::new(&env, &token);
     // token_client.mint(&env.current_contract_address(), &500);
-    // 
+    //
     // let assets = total_assets(&env);
     // assert_eq!(assets, 500, "Should return idle balance when strategy fails");
 }
@@ -1150,19 +1170,19 @@ fn exchange_rate_consistency_with_conversions() {
     // If exchange_rate returns (A, S), then:
     // - convert_to_shares(A) should return approximately S
     // - convert_to_assets(S) should return approximately A
-    
+
     // Note: This requires mocking total_assets and total_shares
-    
+
     // Uncomment when total_shares and total_assets work correctly:
     // Mock state: 1200 assets, 1000 shares
     // let (assets, shares) = exchange_rate(&env);
     // assert_eq!(assets, 1200);
     // assert_eq!(shares, 1000);
-    // 
+    //
     // // Test convert_to_shares: 1200 assets should mint 1000 shares
     // let computed_shares = convert_to_shares(&env, assets).unwrap();
     // assert_eq!(computed_shares, shares, "convert_to_shares should be consistent");
-    // 
+    //
     // // Test convert_to_assets: 1000 shares should convert to 1200 assets
     // let computed_assets = convert_to_assets(&env, shares).unwrap();
     // assert_eq!(computed_assets, assets, "convert_to_assets should be consistent");
