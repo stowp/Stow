@@ -39,4 +39,43 @@ describe('AprDisplay', () => {
       expect.anything(),
     );
   });
+
+  it('formats a zero rate as 0.00%', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      json: async () => ({ rate: 0 }),
+    });
+
+    render(<AprDisplay />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('apr-display-value')).toHaveTextContent('0.00%');
+    });
+  });
+
+  it('renders an error state when the yield endpoint fails', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ message: 'boom' }),
+    });
+
+    render(<AprDisplay />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('apr-display-error')).toBeInTheDocument();
+    });
+  });
+
+  it('renders an error state when the fetch rejects', async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('network down'),
+    );
+
+    render(<AprDisplay />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('apr-display-error')).toBeInTheDocument();
+    });
+  });
 });
