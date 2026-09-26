@@ -227,12 +227,6 @@ fn harvest_increases_exchange_rate_for_depositors() {
 }
 
 #[test]
-#[ignore = "TODO(issue): implement harvest::apply_performance_fee"]
-fn performance_fee_taken_only_on_positive_yield() {
-    todo!("harvest a positive-yield report, assert fees_accrued() == yield * fee_bps / 10_000");
-}
-
-#[test]
 #[ignore = "TODO(issue): implement harvest loss handling (no fee on loss)"]
 fn loss_reduces_exchange_rate_without_charging_fee() {
     todo!("harvest a negative-yield report, assert exchange_rate() decreased and fees_accrued() unchanged");
@@ -1186,4 +1180,205 @@ fn exchange_rate_consistency_with_conversions() {
     // // Test convert_to_assets: 1000 shares should convert to 1200 assets
     // let computed_assets = convert_to_assets(&env, shares).unwrap();
     // assert_eq!(computed_assets, assets, "convert_to_assets should be consistent");
+}
+
+// ---------------------------------------------------------------------------
+// Performance fee taken only on positive yield
+// ---------------------------------------------------------------------------
+
+/// Register + activate a mock strategy and set the performance fee.
+/// Returns `(client, admin, mock)`.
+fn setup_fee_harness(env: &Env, fee_bps: u32) -> (YieldAdapterClient, Address, MockStrategyClient) {
+    let (client, admin, _treasury, _token) = setup_with_token(env);
+    let strategy_address = setup_mock_strategy(env);
+    let mock = MockStrategyClient::new(env, &strategy_address);
+    let id = client.register_strategy(
+        &admin,
+        &strategy_address,
+        &soroban_sdk::String::from_str(env, "mock"),
+    );
+    client.set_active_strategy(&admin, &id);
+    client.set_performance_fee_bps(&admin, &fee_bps);
+    (client, admin, mock)
+}
+
+/// Decode the `fee_taken` field of the most recent `harvested` event. Must be
+/// called directly after `harvest` — `events().all()` only covers the last
+/// top-level invocation.
+fn last_harvest_fee(env: &Env) -> i128 {
+    let (_, _, data) = env.events().all().last().unwrap().clone();
+    let decoded: (Address, i128, i128, u64) =
+        soroban_sdk::TryFromVal::try_from_val(env, &data).unwrap();
+    decoded.2
+}
+
+#[test]
+fn performance_fee_taken_only_on_positive_yield() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, mock) = setup_fee_harness(&env, 1_000); // 10%
+
+    mock.set_reported_balance(&client.address, &500_000);
+    let delta = client.harvest(&Address::generate(&env));
+
+    assert_eq!(last_harvest_fee(&env), 50_000);
+    assert_eq!(delta, 500_000);
+    assert_eq!(client.fees_accrued(), 500_000 * 1_000 / 10_000);
+}
+
+#[test]
+fn no_fee_charged_when_harvest_reports_zero_delta() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, mock) = setup_fee_harness(&env, 1_000);
+
+    mock.set_reported_balance(&client.address, &1_000_000);
+    client.harvest(&Address::generate(&env));
+    let accrued_before = client.fees_accrued();
+
+    // Strategy balance unchanged since the last harvest.
+    let delta = client.harvest(&Address::generate(&env));
+
+    assert_eq!(delta, 0);
+    assert_eq!(last_harvest_fee(&env), 0);
+    assert_eq!(client.fees_accrued(), accrued_before);
+}
+
+#[test]
+fn no_fee_charged_on_loss() {
+    let env = Env::default();
+    env.mock_all_auths();
+    // Start with a 0% fee so the seeding harvest accrues nothing.
+    let (client, admin, mock) = setup_fee_harness(&env, 0);
+    mock.set_reported_balance(&client.address, &1_000_000);
+    client.harvest(&Address::generate(&env));
+    assert_eq!(client.fees_accrued(), 0);
+
+    client.set_performance_fee_bps(&admin, &3_000);
+    mock.set_reported_balance(&client.address, &700_000);
+    let delta = client.harvest(&Address::generate(&env));
+
+    assert_eq!(delta, -300_000);
+    assert_eq!(last_harvest_fee(&env), 0);
+    assert_eq!(client.fees_accrued(), 0, "a loss must never accrue a fee");
+}
+
+#[test]
+fn zero_fee_bps_accrues_nothing_on_positive_yield() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, mock) = setup_fee_harness(&env, 0);
+
+    mock.set_reported_balance(&client.address, &1_000_000);
+    let delta = client.harvest(&Address::generate(&env));
+
+    assert_eq!(delta, 1_000_000);
+    assert_eq!(last_harvest_fee(&env), 0);
+    assert_eq!(client.fees_accrued(), 0);
+}
+
+#[test]
+fn max_fee_bps_takes_thirty_percent_of_yield() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, mock) =
+        setup_fee_harness(&env, crate::fees::MAX_PERFORMANCE_FEE_BPS);
+
+    mock.set_reported_balance(&client.address, &1_000_000);
+    client.harvest(&Address::generate(&env));
+
+    assert_eq!(last_harvest_fee(&env), 300_000);
+    assert_eq!(client.fees_accrued(), 300_000);
+}
+
+#[test]
+fn fee_rounds_down_on_small_yield() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, mock) = setup_fee_harness(&env, 1_000); // 10%
+
+    // 9 * 10% = 0.9 -> rounds down to 0.
+    mock.set_reported_balance(&client.address, &9);
+    client.harvest(&Address::generate(&env));
+    assert_eq!(last_harvest_fee(&env), 0);
+    assert_eq!(client.fees_accrued(), 0);
+
+    // Next delta is 19: 19 * 10% = 1.9 -> rounds down to 1.
+    mock.set_reported_balance(&client.address, &28);
+    client.harvest(&Address::generate(&env));
+    assert_eq!(last_harvest_fee(&env), 1);
+    assert_eq!(client.fees_accrued(), 1);
+}
+
+#[test]
+fn fees_accumulate_across_consecutive_positive_harvests() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, mock) = setup_fee_harness(&env, 2_000); // 20%
+
+    mock.set_reported_balance(&client.address, &100_000);
+    client.harvest(&Address::generate(&env));
+    mock.set_reported_balance(&client.address, &250_000);
+    client.harvest(&Address::generate(&env));
+    mock.set_reported_balance(&client.address, &300_000);
+    client.harvest(&Address::generate(&env));
+
+    // Deltas: 100_000 + 150_000 + 50_000 -> fees 20_000 + 30_000 + 10_000.
+    assert_eq!(client.fees_accrued(), 60_000);
+}
+
+#[test]
+fn fee_rate_change_applies_only_to_later_harvests() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, mock) = setup_fee_harness(&env, 1_000); // 10%
+
+    mock.set_reported_balance(&client.address, &1_000_000);
+    client.harvest(&Address::generate(&env));
+    assert_eq!(client.fees_accrued(), 100_000);
+
+    client.set_performance_fee_bps(&admin, &2_500); // 25%
+    assert_eq!(
+        client.fees_accrued(),
+        100_000,
+        "changing the rate must not retroactively re-price accrued fees"
+    );
+
+    mock.set_reported_balance(&client.address, &1_400_000);
+    client.harvest(&Address::generate(&env));
+    assert_eq!(client.fees_accrued(), 100_000 + 100_000);
+}
+
+#[test]
+fn apply_performance_fee_rejects_non_positive_yield() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _mock) = setup_fee_harness(&env, 1_000);
+
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            crate::harvest::apply_performance_fee(&env, 0),
+            Err(Error::InvalidAmount)
+        );
+        assert_eq!(
+            crate::harvest::apply_performance_fee(&env, -1_000),
+            Err(Error::InvalidAmount)
+        );
+    });
+    assert_eq!(client.fees_accrued(), 0);
+}
+
+#[test]
+fn apply_performance_fee_returns_depositor_remainder() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _mock) = setup_fee_harness(&env, 1_500); // 15%
+
+    let remainder = env.as_contract(&client.address, || {
+        crate::harvest::apply_performance_fee(&env, 1_000_000).unwrap()
+    });
+
+    assert_eq!(remainder, 850_000);
+    assert_eq!(client.fees_accrued(), 150_000);
+    assert_eq!(remainder + client.fees_accrued(), 1_000_000);
 }
