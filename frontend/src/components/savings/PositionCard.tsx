@@ -1,70 +1,47 @@
-import { useState } from 'react';
-import { useWithdrawCooldown } from '../../hooks/useWithdrawCooldown';
-import { useCancelWithdraw } from '../../hooks/useCancelWithdraw';
-import { ConfirmDialog } from '../common/ConfirmDialog';
-import { WithdrawCooldownCountdown } from './WithdrawCooldownCountdown';
+"use client";
 
-interface PositionCardProps {
-  positionId: string;
-  shares: string;
-  value: string;
-  withdrawRequestedAt?: number;
-  cooldownSeconds?: number;
-  onPositionUpdated?: () => void;
+export interface Position {
+  id: string;
+  amount: string;
+  value: number;
+  assetCode: string;
 }
 
-export function PositionCard({
-  positionId,
-  shares,
-  value,
-  withdrawRequestedAt,
-  cooldownSeconds,
-  onPositionUpdated,
+export interface PositionCardProps {
+  position: Position;
+  /** Formatted value string (using locale-aware formatYieldAmount) */
+  formattedValue: string;
+}
+
+export default function PositionCard({
+  position,
+  formattedValue,
 }: PositionCardProps) {
-  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const { isCoolingDown, remainingSeconds } = useWithdrawCooldown({
-    withdrawRequestedAt,
-    cooldownSeconds,
-  });
-  const { cancelWithdraw, isCancelling, error } = useCancelWithdraw({
-    positionId,
-    onSuccess: () => {
-      setShowCancelConfirm(false);
-      onPositionUpdated?.();
-    },
-  });
-
   return (
-    <div className="position-card">
-      <div className="position-card__header">
-        <span className="position-card__label">Position</span>
-        <span className="position-card__value">{value}</span>
+    <article
+      className="rounded-lg border border-border bg-card p-4"
+      aria-labelledby={`position-title-${position.id}`}
+    >
+      <header>
+        <h3
+          id={`position-title-${position.id}`}
+          className="text-sm font-medium text-muted"
+        >
+          Position Value
+        </h3>
+      </header>
+
+      <div className="mt-2">
+        <p
+          className="text-2xl font-bold"
+          aria-label={`Position value: ${formattedValue}`}
+        >
+          {formattedValue}
+        </p>
+        <p className="mt-1 text-xs text-muted">
+          {position.amount} {position.assetCode}
+        </p>
       </div>
-      <div className="position-card__shares">
-        <span className="position-card__label">Shares</span>
-        <span className="position-card__shares-value">{shares}</span>
-      </div>
-
-      {isCoolingDown && (
-        <WithdrawCooldownCountdown
-          remainingSeconds={remainingSeconds}
-          onCancel={() => setShowCancelConfirm(true)}
-          isCancelling={isCancelling}
-        />
-      )}
-
-      {error && <p className="position-card__error">{error}</p>}
-
-      <ConfirmDialog
-        open={showCancelConfirm}
-        title="Cancel withdrawal request?"
-        message="Your shares will be re-minted and the cooldown will be cancelled."
-        confirmLabel="Cancel withdrawal"
-        cancelLabel="Keep request"
-        isSubmitting={isCancelling}
-        onConfirm={cancelWithdraw}
-        onCancel={() => setShowCancelConfirm(false)}
-      />
-    </div>
+    </article>
   );
 }

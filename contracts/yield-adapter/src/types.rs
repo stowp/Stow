@@ -89,6 +89,12 @@ pub enum DataKey {
     /// `Position` entry is not possible on Soroban without an explicit,
     /// unbounded index.
     TotalShares,
+    /// The adapter's deployed balance in the active strategy, as of the
+    /// last successful `harvest`. `harvest` diffs the strategy's live
+    /// `balance()` report against this snapshot to compute yield/loss;
+    /// absent (before the first harvest, or with no active strategy) reads
+    /// as `0`.
+    DeployedBalance,
     /// Fees accrued (in vault-token stroops) and not yet swept to the
     /// treasury via `withdraw_fees`.
     FeesAccrued,

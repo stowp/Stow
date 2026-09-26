@@ -17,10 +17,6 @@
 //! - `convert_to_assets` (used by `request_withdraw`, `claim_withdraw`,
 //!   `cancel_withdraw`'s re-mint): round **down**. A withdrawal that doesn't
 //!   divide evenly pays out slightly less, never more.
-//!
-//! TODO(issue): implement both directions and add the property test in
-//! `test.rs` that asserts no sequence of deposit/withdraw calls can increase
-//! total assets extracted beyond what was deposited plus harvested yield.
 
 use soroban_sdk::{token, Env, IntoVal, Symbol, Vec};
 

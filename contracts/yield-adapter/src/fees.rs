@@ -8,7 +8,11 @@
 
 use soroban_sdk::{Address, Env};
 
+use crate::admin;
 use crate::error::Error;
+use crate::events::TOPIC_FEE_COLLECTED;
+use crate::storage::{self, extend_instance_ttl};
+use crate::types::DataKey;
 
 /// Maximum performance fee, in basis points. Enforced by
 /// `admin::set_performance_fee_bps`; documented here because it is a
@@ -17,17 +21,19 @@ pub const MAX_PERFORMANCE_FEE_BPS: u32 = 3_000; // 30%
 
 /// Validate a proposed performance fee. Errors `Error::FeeTooHigh` if
 /// `bps > MAX_PERFORMANCE_FEE_BPS`.
-///
-/// TODO(issue): implement.
-pub fn validate_fee_bps(_bps: u32) -> Result<(), Error> {
-    unimplemented!("fees: validate_fee_bps")
+pub fn validate_fee_bps(bps: u32) -> Result<(), Error> {
+    if bps > MAX_PERFORMANCE_FEE_BPS {
+        return Err(Error::FeeTooHigh);
+    }
+    Ok(())
 }
 
 /// Read the current accrued-and-unswept fee balance.
-///
-/// TODO(issue): implement.
-pub fn fees_accrued(_env: &Env) -> i128 {
-    unimplemented!("fees: fees_accrued")
+pub fn fees_accrued(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&DataKey::FeesAccrued)
+        .unwrap_or(0)
 }
 
 /// Sweep all accrued fees to the treasury. Callable by anyone (funds only
@@ -40,8 +46,22 @@ pub fn fees_accrued(_env: &Env) -> i128 {
 ///   reentrant call from a hostile token contract cannot double-spend the
 ///   swept amount.
 /// - Emits a `fee_collected` event.
-///
-/// TODO(issue): implement.
-pub fn withdraw_fees(_env: &Env, _caller: Address) -> Result<i128, Error> {
-    unimplemented!("fees: withdraw_fees")
+pub fn withdraw_fees(env: &Env, caller: Address) -> Result<i128, Error> {
+    let accrued = fees_accrued(env);
+    if accrued <= 0 {
+        return Err(Error::NoFeesAccrued);
+    }
+
+    extend_instance_ttl(env);
+    env.storage().instance().set(&DataKey::FeesAccrued, &0i128);
+
+    let treasury = admin::treasury(env)?;
+    storage::transfer_out(env, &treasury, accrued)?;
+
+    env.events().publish(
+        (TOPIC_FEE_COLLECTED,),
+        (caller, accrued, env.ledger().timestamp()),
+    );
+
+    Ok(accrued)
 }

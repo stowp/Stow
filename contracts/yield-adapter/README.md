@@ -127,3 +127,77 @@ Each topic's exact data payload will be finalized alongside the entrypoint
 that emits it (see the corresponding module doc comment) — documented here
 once implemented, mirroring `savings-vault/README.md`'s "Event schema"
 section.
+
+### Topics
+
+#### `init`
+Topics: `(Symbol("init"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `admin` | `Address` | Initial admin. |
+| `treasury` | `Address` | Initial treasury (receives collected performance fees). |
+| `token` | `Address` | SEP-41 token this adapter routes. |
+| `schema_version` | `u32` | Value of `EVENT_SCHEMA_VERSION` at deploy time. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `strategy_registered`
+Topics: `(Symbol("strategy_registered"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `u64` | The newly allocated strategy id. |
+| `address` | `Address` | The registered strategy contract's address. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `strategy_deregistered`
+Topics: `(Symbol("strategy_deregistered"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `u64` | The deregistered strategy's id. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `strategy_changed`
+Topics: `(Symbol("strategy_changed"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `from` | `Option<u64>` | Previously active strategy id, or `None` on first activation. |
+| `to` | `Option<u64>` | Newly active strategy id, or `None` when `circuit_breaker::emergency_withdraw_all` clears the active strategy with nothing set in its place. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+Emitted by `set_active_strategy` (`from: None`), `migrate_strategy` (both
+`from` and `to` set), and `circuit_breaker::emergency_withdraw_all`
+(`to: None`) — the indexer can distinguish first activation, migration, and
+emergency-clear purely from which of `from`/`to` is present.
+
+#### `harvested`
+Topics: `(Symbol("harvested"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `caller` | `Address` | Whoever called `harvest` (permissionless keeper pattern — attribution only, not an auth check). |
+| `delta` | `i128` | Signed change in the strategy's deployed balance since the last harvest: positive is yield, negative is a loss. |
+| `fee_taken` | `i128` | Performance fee charged on `delta`. Always `0` when `delta <= 0` — see `harvest::apply_performance_fee`'s doc for why a loss is never fee-charged. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+The indexer can build a full yield history purely from this topic: sum
+`delta` for gross performance, sum `fee_taken` for fees generated.
+
+#### `fee_collected`
+Topics: `(Symbol("fee_collected"),)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `caller` | `Address` | Whoever called `withdraw_fees` (permissionless — funds only ever move to the fixed `treasury` address). |
+| `amount` | `i128` | Amount swept to the treasury. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+Remaining topics (`admin_set`, `paused_changed`, `upgraded`, `deposited`,
+`withdraw_requested`, `withdraw_claimed`, `withdraw_cancelled`) are declared
+in `events.rs` but their publishers are not yet wired into the corresponding
+entrypoints, which are themselves still unimplemented — see each module's
+`TODO(issue)` doc comments. Documenting their payloads ahead of the
+entrypoints that would emit them would drift out of sync with whatever the
+eventual implementation actually needs.
