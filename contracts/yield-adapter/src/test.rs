@@ -973,9 +973,9 @@ fn total_shares_returns_zero_before_initialize() {
     use crate::accounting::total_shares;
 
     let env = Env::default();
+    let client = setup(&env);
 
-    // Before initialization, total_shares should return 0
-    let shares = total_shares(&env);
+    let shares = env.as_contract(&client.address, || total_shares(&env));
     assert_eq!(shares, 0, "total_shares should be 0 before any deposits");
 }
 
@@ -984,9 +984,9 @@ fn total_assets_returns_zero_before_initialize() {
     use crate::accounting::total_assets;
 
     let env = Env::default();
+    let client = setup(&env);
 
-    // Before initialization (no token set), total_assets should return 0
-    let assets = total_assets(&env);
+    let assets = env.as_contract(&client.address, || total_assets(&env));
     assert_eq!(assets, 0, "total_assets should be 0 before initialization");
 }
 
@@ -1013,13 +1013,15 @@ fn total_shares_reflects_running_total() {
     use crate::types::DataKey;
 
     let env = Env::default();
+    let client = setup(&env);
 
-    // Manually set TotalShares to test the read
-    env.storage()
-        .instance()
-        .set(&DataKey::TotalShares, &1000i128);
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalShares, &1000i128);
+    });
 
-    let shares = total_shares(&env);
+    let shares = env.as_contract(&client.address, || total_shares(&env));
     assert_eq!(shares, 1000, "total_shares should reflect stored value");
 }
 
