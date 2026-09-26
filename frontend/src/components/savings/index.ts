@@ -11,4 +11,7 @@ export type {
   SavingsListSkeletonProps,
 } from './SavingsListRowSkeleton';
 export { default as GoalCard } from './GoalCard';
-export type { GoalCardGoal, GoalCardProps } from './GoalCard';
+export type { GoalCardGoal, GoalCardProps } from './GoalCard';export { default as YieldPositionCard } from './YieldPositionCard';
+export type { YieldPosition, YieldPositionCardProps } from './YieldPositionCard';
+export { default as HarvestHistoryList, attributeHarvest } from './HarvestHistoryList';
+export type { HarvestHistoryEntry, HarvestHistoryListProps } from './HarvestHistoryList';
