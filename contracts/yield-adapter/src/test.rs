@@ -12,7 +12,7 @@
 //! that mock is issue-worthy on its own (see the module doc below) and does
 //! not exist yet, so those tests cannot be un-ignored until it does.
 
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env};
 
 use crate::error::Error;
 use crate::{YieldAdapter, YieldAdapterClient};
@@ -28,8 +28,8 @@ fn setup(env: &Env) -> YieldAdapterClient {
 
 /// Full setup: adapter + SEP-41 mock token + admin + treasury.
 ///
-/// Returns `(client, admin, treasury, token_address)`.
-fn setup_with_token(env: &Env) -> (YieldAdapterClient, Address, Address, Address) {
+/// Returns `(client, admin, treasury, token_address, token_admin)`.
+fn setup_with_token(env: &Env) -> (YieldAdapterClient, Address, Address, Address, Address) {
     let client = setup(env);
     let admin = Address::generate(env);
     let treasury = Address::generate(env);
@@ -40,7 +40,14 @@ fn setup_with_token(env: &Env) -> (YieldAdapterClient, Address, Address, Address
 
     client.initialize(&admin, &treasury, &token_address);
 
-    (client, admin, treasury, token_address)
+    (client, admin, treasury, token_address, token_admin)
+}
+
+/// Mint `amount` of the mock SEP-41 token to `recipient`.
+fn mint(env: &Env, token: &Address, _token_admin: &Address, recipient: &Address, amount: i128) {
+    let sac = StellarAssetClient::new(env, token);
+    env.mock_all_auths();
+    sac.mint(recipient, &amount);
 }
 
 // ---------------------------------------------------------------------------
@@ -48,11 +55,10 @@ fn setup_with_token(env: &Env) -> (YieldAdapterClient, Address, Address, Address
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "TODO(issue): implement admin::initialize"]
 fn initialize_sets_admin_treasury_and_token() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, admin, treasury, token) = setup_with_token(&env);
+    let (client, admin, treasury, token, _token_admin) = setup_with_token(&env);
     assert_eq!(client.admin(), admin);
     assert_eq!(client.treasury(), treasury);
     assert_eq!(client.token(), token);
@@ -60,14 +66,28 @@ fn initialize_sets_admin_treasury_and_token() {
 }
 
 #[test]
-#[ignore = "TODO(issue): implement deposit::deposit + accounting::convert_to_shares"]
 fn deposit_mints_shares_proportional_to_exchange_rate() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _admin, _treasury, _token) = setup_with_token(&env);
-    let _user = Address::generate(&env);
+    let (client, _admin, _treasury, token, token_admin) = setup_with_token(&env);
+    let user = Address::generate(&env);
+
     // On the very first deposit, shares must be minted 1:1 with assets.
-    todo!("deposit `amount`, assert `get_position(user).shares == amount`");
+    let amount = 1_000_000i128;
+    mint(&env, &token, &token_admin, &user, amount);
+    let shares_minted = client.deposit(&user, &amount);
+    assert_eq!(shares_minted, amount);
+    assert_eq!(client.get_position(&user).shares, amount);
+    assert_eq!(client.total_shares(), amount);
+
+    // Not extended to also cover "deposit again after simulating an
+    // exchange-rate move and assert shares scale accordingly" (this
+    // issue's second half): that needs `harvest`, which requires a mock
+    // strategy contract — a separate, larger unimplemented piece, out of
+    // scope here (see PR description). `accounting::convert_to_shares`
+    // itself already implements the proportional post-first-deposit case;
+    // this test just has no way yet to move the exchange rate to exercise
+    // it.
 }
 
 #[test]
@@ -117,7 +137,7 @@ fn unauthorized_access_rejected() {
 fn withdraw_more_shares_than_owned_rejected() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _admin, _treasury, _token) = setup_with_token(&env);
+    let (client, _admin, _treasury, _token, _token_admin) = setup_with_token(&env);
     let owner = Address::generate(&env);
 
     let result = client.try_request_withdraw(&owner, &1i128);

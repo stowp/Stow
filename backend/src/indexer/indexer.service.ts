@@ -9,6 +9,11 @@ import {
 } from './entities/contract-event.entity';
 import { FeeHistory } from './entities/fee-history.entity';
 import { IndexerCheckpoint } from './entities/indexer-checkpoint.entity';
+import {
+  PendingWithdrawal,
+  PendingWithdrawalStatus,
+} from './entities/pending-withdrawal.entity';
+import { HarvestHistory } from './entities/harvest-history.entity';
 import { IndexerMetricsDto } from './dto/indexer-metrics.dto';
 import { BackfillResponseDto } from './dto/backfill.dto';
 import { ReconciliationService } from './reconciliation.service';
@@ -43,6 +48,10 @@ export class IndexerService implements OnModuleInit {
     private readonly feeHistoryRepository: Repository<FeeHistory>,
     @InjectRepository(IndexerCheckpoint)
     private readonly checkpointRepository: Repository<IndexerCheckpoint>,
+    @InjectRepository(PendingWithdrawal)
+    private readonly pendingWithdrawalRepository: Repository<PendingWithdrawal>,
+    @InjectRepository(HarvestHistory)
+    private readonly harvestHistoryRepository: Repository<HarvestHistory>,
     private readonly reconciliationService: ReconciliationService,
     private readonly sorobanService: SorobanService,
     private readonly savingsProjectionService: SavingsProjectionService,
@@ -163,15 +172,135 @@ export class IndexerService implements OnModuleInit {
   }
 
   /**
-   * Decode a savings-vault event and apply its side effects (update savings
-   * balances, mark goals reached, record group settlements, etc.) via the
-   * shared savings-projection service.
+   * Decode an event and apply its side effects. Yield-adapter topics are
+   * handled directly here (see `applyWithdrawRequested` / `applyWithdrawCancelled`
+   * / `applyHarvested`); everything else is a savings-vault topic, routed to
+   * the shared savings-projection service (update savings balances, mark
+   * goals reached, record group settlements, etc.).
    */
   private async decodeAndApply(event: ContractEvent): Promise<void> {
-    await this.savingsProjectionService.apply(
-      event.event_type,
-      event.data ?? {},
+    switch (event.event_type) {
+      case 'withdraw_requested':
+        await this.applyWithdrawRequested(event);
+        return;
+      case 'withdraw_cancelled':
+        await this.applyWithdrawCancelled(event);
+        return;
+      case 'harvested':
+        await this.applyHarvested(event);
+        return;
+      default:
+        await this.savingsProjectionService.apply(
+          event.event_type,
+          event.data ?? {},
+        );
+    }
+  }
+
+  /**
+   * Decode a yield-adapter `withdraw_requested` event into a queryable
+   * pending-withdrawal record, keyed by the adapter's own request id so a
+   * replayed event upserts rather than duplicates.
+   */
+  private async applyWithdrawRequested(event: ContractEvent): Promise<void> {
+    const data = event.data ?? {};
+    const requestId = String(data.id ?? data.request_id);
+
+    const existing = await this.pendingWithdrawalRepository.findOne({
+      where: { request_id: requestId },
+    });
+    if (existing) return;
+
+    await this.pendingWithdrawalRepository.save(
+      this.pendingWithdrawalRepository.create({
+        request_id: requestId,
+        owner: String(data.owner),
+        shares: String(data.shares),
+        claimable_at: this.toDate(data.claimable_at),
+        status: PendingWithdrawalStatus.PENDING,
+      }),
     );
+  }
+
+  /**
+   * Decode a yield-adapter `withdraw_cancelled` event: mark the matching
+   * pending-withdrawal record cancelled, distinct from claimed. A no-op if
+   * the originating `withdraw_requested` hasn't been indexed yet (e.g. out
+   * of order delivery); the retry/backfill path will catch it up.
+   */
+  private async applyWithdrawCancelled(event: ContractEvent): Promise<void> {
+    const data = event.data ?? {};
+    const requestId = String(data.id ?? data.request_id);
+
+    await this.pendingWithdrawalRepository.update(
+      { request_id: requestId },
+      {
+        status: PendingWithdrawalStatus.CANCELLED,
+        cancelled_at: new Date(),
+      },
+    );
+  }
+
+  /**
+   * Decode a yield-adapter `harvested` event into a harvest-history record,
+   * preserving the signed delta (positive yield, negative loss) and the fee
+   * taken (`0` on a loss).
+   */
+  private async applyHarvested(event: ContractEvent): Promise<void> {
+    const data = event.data ?? {};
+
+    await this.harvestHistoryRepository.save(
+      this.harvestHistoryRepository.create({
+        delta: this.stringifyStroops(data.delta),
+        fee: this.stringifyStroops(data.fee, '0'),
+        harvested_at: this.toDate(data.timestamp),
+        ledger: event.ledger,
+        tx_hash: event.tx_hash,
+      }),
+    );
+  }
+
+  /**
+   * Renders a decoded contract event's stroop-amount field (i128, so kept
+   * as a string rather than a JS `number` to avoid precision loss) as a
+   * string. `fallback` is used only when `value` is absent
+   * (`undefined`/`null`); a present value of the wrong type (e.g. an
+   * object, where the RPC's XDR decoding produced something unexpected)
+   * throws instead of silently rendering `'[object Object]'` or being
+   * swapped for the fallback, so a malformed event fails loudly rather
+   * than masquerading as a valid zero amount.
+   */
+  private stringifyStroops(value: unknown, fallback?: string): string {
+    if (value === undefined || value === null) {
+      if (fallback === undefined) {
+        throw new Error(
+          'stringifyStroops: value is missing and no fallback was given',
+        );
+      }
+      return fallback;
+    }
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'bigint'
+    ) {
+      return String(value);
+    }
+    throw new Error(
+      `stringifyStroops: unexpected type ${typeof value} for a stroop-amount field`,
+    );
+  }
+
+  /**
+   * Converts a contract event field carrying a Soroban `u64` ledger
+   * timestamp in whole seconds since the Unix epoch — decoded as a JS
+   * `number`, `string`, or `bigint` depending on the XDR normalization step
+   * upstream — into a `Date`.
+   */
+  private toDate(value: unknown): Date {
+    const seconds =
+      typeof value === 'bigint' ? Number(value) : Number(value ?? 0);
+    return new Date(seconds * 1000);
   }
 
   // --- replay / maintenance ----------------------------------------------
@@ -284,7 +413,7 @@ export class IndexerService implements OnModuleInit {
     const result = await this.contractEventRepository.delete({
       status: ContractEventStatus.PROCESSED,
       created_at: LessThan(cutoff),
-    } as unknown as Record<string, unknown>);
+    });
     return result.affected ?? 0;
   }
 

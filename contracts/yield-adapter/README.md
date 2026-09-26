@@ -127,3 +127,22 @@ Each topic's exact data payload will be finalized alongside the entrypoint
 that emits it (see the corresponding module doc comment) — documented here
 once implemented, mirroring `savings-vault/README.md`'s "Event schema"
 section.
+
+### Topics
+
+#### `deposited`
+Topics: `(Symbol("deposited"), from: Address)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `amount` | `i128` | Vault-token amount deposited. |
+| `shares_minted` | `i128` | Shares minted for this deposit. |
+| `new_balance` | `i128` | `from`'s total shares after this deposit. |
+| `timestamp` | `u64` | Ledger timestamp of the call. |
+
+Documented only for the no-active-strategy, first-deposit path currently
+implemented in `deposit::deposit` — see that function's doc comment for
+what is and is not covered yet. Remaining topics are declared in
+`events.rs` but their publishers are not yet wired into entrypoints that
+are themselves still unimplemented; see each module's `TODO(issue)` doc
+comments.

@@ -6,6 +6,8 @@ import { FeeHistory } from './entities/fee-history.entity';
 import { IndexerCheckpoint } from './entities/indexer-checkpoint.entity';
 import { ChainSyncCheckpoint } from './entities/chain-sync-checkpoint.entity';
 import { ReorgEvent } from './entities/reorg-event.entity';
+import { PendingWithdrawal } from './entities/pending-withdrawal.entity';
+import { HarvestHistory } from './entities/harvest-history.entity';
 import { IndexerService } from './indexer.service';
 import { IndexerController } from './indexer.controller';
 import { IndexerHealthController } from './indexer-health.controller';
@@ -21,6 +23,8 @@ import { SavingsProjectionModule } from '../savings-projection/savings-projectio
       IndexerCheckpoint,
       ChainSyncCheckpoint,
       ReorgEvent,
+      PendingWithdrawal,
+      HarvestHistory,
     ]),
     CacheModule.register(),
     SavingsProjectionModule,

@@ -2,8 +2,12 @@
 
 use soroban_sdk::{Address, Env};
 
+use crate::accounting;
+use crate::admin;
 use crate::error::Error;
-use crate::types::Position;
+use crate::events::TOPIC_DEPOSITED;
+use crate::storage::{self, extend_instance_ttl};
+use crate::types::{DataKey, Position};
 
 /// Deposit `amount` of the vault token, minting shares to `from` at the
 /// current exchange rate.
@@ -23,16 +27,63 @@ use crate::types::Position;
 /// - Creates the position on first deposit; increments `shares` otherwise.
 /// - Emits a `deposited` event.
 ///
-/// TODO(issue): implement. Compare with `savings-vault::flexible::deposit`
-/// for the auth/validation/storage shape — the share-minting math is new to
-/// this crate and has no direct analogue there.
-pub fn deposit(_env: &Env, _from: Address, _amount: i128) -> Result<i128, Error> {
-    unimplemented!("deposit: deposit")
+/// Implements the no-active-strategy path only: shares are minted (1:1 on
+/// the first deposit, proportionally to the current exchange rate
+/// thereafter, via `accounting::convert_to_shares`) and funds are
+/// transferred in and left idle (the contract's own custody), exactly the
+/// documented fallback behavior above for "with no active strategy". Does
+/// **not** implement forwarding to an active strategy or the
+/// `StrategyCapExceeded` check — both depend on the unimplemented strategy
+/// interface — see PR description.
+pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<i128, Error> {
+    extend_instance_ttl(env);
+    from.require_auth();
+
+    admin::require_not_paused(env)?;
+
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    let shares_minted = accounting::convert_to_shares(env, amount)?;
+
+    storage::transfer_in(env, &from, amount)?;
+
+    let now = env.ledger().timestamp();
+    let key = DataKey::Position(from.clone());
+    let existing: Option<Position> = env.storage().persistent().get(&key);
+    let mut position = existing.unwrap_or(Position {
+        owner: from.clone(),
+        shares: 0,
+        created_at: now,
+        updated_at: now,
+    });
+
+    position.shares = position
+        .shares
+        .checked_add(shares_minted)
+        .ok_or(Error::Overflow)?;
+    position.updated_at = now;
+    env.storage().persistent().set(&key, &position);
+    storage::extend_persistent_ttl(env, &key);
+
+    let new_total_shares = accounting::total_shares(env)
+        .checked_add(shares_minted)
+        .ok_or(Error::Overflow)?;
+    env.storage()
+        .instance()
+        .set(&DataKey::TotalShares, &new_total_shares);
+
+    env.events().publish(
+        (TOPIC_DEPOSITED, from),
+        (amount, shares_minted, position.shares, now),
+    );
+
+    Ok(shares_minted)
 }
 
 /// Read `owner`'s position, or `Error::NotFound`.
-///
-/// TODO(issue): implement.
-pub fn get_position(_env: &Env, _owner: Address) -> Result<Position, Error> {
-    unimplemented!("deposit: get_position")
+pub fn get_position(env: &Env, owner: Address) -> Result<Position, Error> {
+    let key = DataKey::Position(owner);
+    env.storage().persistent().get(&key).ok_or(Error::NotFound)
 }

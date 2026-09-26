@@ -39,42 +39,42 @@ pub const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = PERSISTENT_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
 /// Bump the instance TTL. Call at the top of every state-changing entrypoint.
-///
-/// TODO(issue): implement — see `savings-vault::storage::extend_instance_ttl`
-/// for the reference implementation; this adapter's version is identical.
-pub fn extend_instance_ttl(_env: &Env) {
-    unimplemented!("storage: extend_instance_ttl")
+pub fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 }
 
 /// Bump a persistent entry's TTL. Call after every read and write of a
 /// `Strategy`, `Position`, or `WithdrawRequest` record.
-///
-/// TODO(issue): implement — mirrors
-/// `savings-vault::storage::extend_persistent_ttl`.
-pub fn extend_persistent_ttl(_env: &Env, _key: &DataKey) {
-    unimplemented!("storage: extend_persistent_ttl")
+pub fn extend_persistent_ttl(env: &Env, key: &DataKey) {
+    env.storage().persistent().extend_ttl(
+        key,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 }
 
 /// The vault token (e.g. USDC) this adapter routes, or `None` before
 /// `initialize`.
-///
-/// TODO(issue): implement.
-pub fn get_token(_env: &Env) -> Option<Address> {
-    unimplemented!("storage: get_token")
+pub fn get_token(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Token)
 }
 
 /// Persist `DataKey::Token`.
-///
-/// TODO(issue): implement.
-pub fn set_token(_env: &Env, _token: &Address) {
-    unimplemented!("storage: set_token")
+pub fn set_token(env: &Env, token: &Address) {
+    env.storage().instance().set(&DataKey::Token, token);
 }
 
 /// The contract admin, or `None` before `initialize`.
-///
-/// TODO(issue): implement.
-pub fn get_admin(_env: &Env) -> Option<Address> {
-    unimplemented!("storage: get_admin")
+pub fn get_admin(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Admin)
+}
+
+/// The treasury address that receives collected performance fees, or `None`
+/// before `initialize`.
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Treasury)
 }
 
 /// Allocate and persist the next id for the given counter key
@@ -99,10 +99,14 @@ pub fn next_id(_env: &Env, _key: DataKey) -> u64 {
 ///
 /// Errors `Error::InvalidAmount` if `amount <= 0`, `Error::NotInitialized`
 /// if the token has not been configured.
-///
-/// TODO(issue): implement.
-pub fn transfer_in(_env: &Env, _from: &Address, _amount: i128) -> Result<(), Error> {
-    unimplemented!("storage: transfer_in")
+pub fn transfer_in(env: &Env, from: &Address, amount: i128) -> Result<(), Error> {
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let token_address = get_token(env).ok_or(Error::NotInitialized)?;
+    let token_client = token::Client::new(env, &token_address);
+    token_client.transfer(from, &env.current_contract_address(), &amount);
+    Ok(())
 }
 
 /// Move `amount` of the vault token from this contract out to `to`.
