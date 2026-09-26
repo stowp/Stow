@@ -1111,7 +1111,9 @@ fn setup_fee_harness(env: &Env, fee_bps: u32) -> (YieldAdapterClient, Address, M
     (client, admin, mock)
 }
 
-/// Decode the `fee_taken` field of the most recent `harvested` event.
+/// Decode the `fee_taken` field of the most recent `harvested` event. Must be
+/// called directly after `harvest` — `events().all()` only covers the last
+/// top-level invocation.
 fn last_harvest_fee(env: &Env) -> i128 {
     let (_, _, data) = env.events().all().last().unwrap().clone();
     let decoded: (Address, i128, i128, u64) =
@@ -1128,9 +1130,9 @@ fn performance_fee_taken_only_on_positive_yield() {
     mock.set_reported_balance(&client.address, &500_000);
     let delta = client.harvest(&Address::generate(&env));
 
+    assert_eq!(last_harvest_fee(&env), 50_000);
     assert_eq!(delta, 500_000);
     assert_eq!(client.fees_accrued(), 500_000 * 1_000 / 10_000);
-    assert_eq!(last_harvest_fee(&env), 50_000);
 }
 
 #[test]
@@ -1194,8 +1196,8 @@ fn max_fee_bps_takes_thirty_percent_of_yield() {
     mock.set_reported_balance(&client.address, &1_000_000);
     client.harvest(&Address::generate(&env));
 
-    assert_eq!(client.fees_accrued(), 300_000);
     assert_eq!(last_harvest_fee(&env), 300_000);
+    assert_eq!(client.fees_accrued(), 300_000);
 }
 
 #[test]
@@ -1207,14 +1209,14 @@ fn fee_rounds_down_on_small_yield() {
     // 9 * 10% = 0.9 -> rounds down to 0.
     mock.set_reported_balance(&client.address, &9);
     client.harvest(&Address::generate(&env));
-    assert_eq!(client.fees_accrued(), 0);
     assert_eq!(last_harvest_fee(&env), 0);
+    assert_eq!(client.fees_accrued(), 0);
 
     // Next delta is 19: 19 * 10% = 1.9 -> rounds down to 1.
     mock.set_reported_balance(&client.address, &28);
     client.harvest(&Address::generate(&env));
-    assert_eq!(client.fees_accrued(), 1);
     assert_eq!(last_harvest_fee(&env), 1);
+    assert_eq!(client.fees_accrued(), 1);
 }
 
 #[test]
