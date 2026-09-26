@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   NotFoundException,
@@ -24,6 +25,7 @@ import { BalanceService } from './balance.service';
 import { LockedPlansService } from './locked-plans.service';
 import { ListGoalsDto } from './dto/list-goals.dto';
 import { ListLockedDto } from './dto/list-locked.dto';
+import { SavingsSummaryDto } from './dto/savings-summary.dto';
 import { YieldPositionResponseDto } from './dto/yield-position-response.dto';
 import { SavingsListQueryDto } from './dto/pagination.dto';
 import { SavingsService } from './savings.service';
@@ -167,6 +169,35 @@ export class SavingsController {
   }
 
   /**
+   * GET /savings/summary?address=
+   *
+   * Returns per-product savings totals (flexible balance + goals saved)
+   * for `address`, plus a grand total across all tracked products. Backs
+   * the dashboard's savings overview.
+   */
+  @Get('summary')
+  @Public()
+  @ApiOperation({ summary: "Get an address's per-product savings summary" })
+  @ApiQuery({ name: 'address', required: true, type: String })
+  @ApiResponse({
+    status: 200,
+    description: 'Per-product totals and grand total for the address',
+    type: SavingsSummaryDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'address query parameter is required',
+  })
+  async summary(
+    @Query('address') address?: string,
+  ): Promise<SavingsSummaryDto> {
+    if (!address) {
+      throw new BadRequestException('address query parameter is required');
+    }
+    return this.savingsService.summary(address);
+  }
+
+  /**
    * GET /savings/yield/position
    *
    * Returns the authenticated caller's yield-adapter position:
@@ -189,3 +220,4 @@ export class SavingsController {
   ): Promise<YieldPositionResponseDto> {
     return this.savingsService.getYieldPosition(user.stellar_address);
   }
+}

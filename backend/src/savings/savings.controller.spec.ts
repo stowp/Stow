@@ -1,21 +1,25 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { SavingsController } from './savings.controller';
 import { SavingsService } from './savings.service';
 import { GoalsService } from '../goals/goals.service';
 import { LockedPlansService } from './locked-plans.service';
 import { BalanceService } from './balance.service';
+import { YieldPosition } from './entities/yield-position.entity';
 
 describe('SavingsController', () => {
   let controller: SavingsController;
-  let goalsService: { listByOwnerPaginated: jest.Mock };
+  let goalsService: { listByOwnerPaginated: jest.Mock; summary: jest.Mock };
   let lockedPlansService: { listByOwner: jest.Mock };
-  let balanceService: { findAccount: jest.Mock };
+  let balanceService: { findAccount: jest.Mock; get: jest.Mock };
+  let yieldPositionRepository: { findOne: jest.Mock };
 
   beforeEach(async () => {
-    goalsService = { listByOwnerPaginated: jest.fn() };
+    goalsService = { listByOwnerPaginated: jest.fn(), summary: jest.fn() };
     lockedPlansService = { listByOwner: jest.fn() };
-    balanceService = { findAccount: jest.fn() };
+    balanceService = { findAccount: jest.fn(), get: jest.fn() };
+    yieldPositionRepository = { findOne: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [SavingsController],
@@ -24,6 +28,10 @@ describe('SavingsController', () => {
         { provide: GoalsService, useValue: goalsService },
         { provide: LockedPlansService, useValue: lockedPlansService },
         { provide: BalanceService, useValue: balanceService },
+        {
+          provide: getRepositoryToken(YieldPosition),
+          useValue: yieldPositionRepository,
+        },
       ],
     }).compile();
 
@@ -196,6 +204,46 @@ describe('SavingsController', () => {
       await expect(controller.getAccount('GUNKNOWN')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('summary', () => {
+    it('returns per-product totals and grand total for a valid address', async () => {
+      balanceService.get.mockResolvedValue({
+        account: 'GADDR',
+        amount: '500000',
+      });
+      goalsService.summary.mockResolvedValue({
+        total_goals: 1,
+        active_goals: 1,
+        reached_goals: 0,
+        total_target: '1000000',
+        total_saved: '250000',
+      });
+
+      const result = await controller.summary('GADDR');
+
+      expect(balanceService.get).toHaveBeenCalledWith('GADDR');
+      expect(goalsService.summary).toHaveBeenCalledWith('GADDR');
+      expect(result).toEqual({
+        address: 'GADDR',
+        products: [
+          { product: 'flexible', total: '500000' },
+          { product: 'goals', total: '250000' },
+        ],
+        total: '750000',
+      });
+    });
+
+    it('throws BadRequestException when address is missing', async () => {
+      await expect(controller.summary(undefined)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(balanceService.get).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when address is an empty string', async () => {
+      await expect(controller.summary('')).rejects.toThrow(BadRequestException);
     });
   });
 
