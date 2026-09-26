@@ -1281,8 +1281,7 @@ fn zero_fee_bps_accrues_nothing_on_positive_yield() {
 fn max_fee_bps_takes_thirty_percent_of_yield() {
     let env = Env::default();
     env.mock_all_auths();
-    let (client, _admin, mock) =
-        setup_fee_harness(&env, crate::fees::MAX_PERFORMANCE_FEE_BPS);
+    let (client, _admin, mock) = setup_fee_harness(&env, crate::fees::MAX_PERFORMANCE_FEE_BPS);
 
     mock.set_reported_balance(&client.address, &1_000_000);
     client.harvest(&Address::generate(&env));
