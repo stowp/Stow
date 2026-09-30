@@ -792,6 +792,68 @@ fn get_strategy_unknown_id_is_strategy_not_found() {
 }
 
 #[test]
+fn get_strategy_reads_back_registered_record() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_234);
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (strategy, id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    let info = client.get_strategy(&id);
+    assert_eq!(info.id, id);
+    assert_eq!(info.address, strategy.address);
+    assert_eq!(info.name, String::from_str(&env, "mock"));
+    assert_eq!(info.deposit_cap, 0);
+    assert_eq!(info.registered_at, 1_234);
+    assert_eq!(info.deregistered_at, None);
+
+    // Ids past the last allocated one are still typed errors.
+    assert_eq!(
+        client.try_get_strategy(&(id + 1)),
+        Err(Ok(Error::StrategyNotFound))
+    );
+    assert_eq!(
+        client.try_get_strategy(&0),
+        Err(Ok(Error::StrategyNotFound))
+    );
+}
+
+#[test]
+fn list_strategies_is_empty_before_any_registration() {
+    let env = Env::default();
+    let (client, _admin, _treasury, _token) = setup_with_token(&env);
+    assert_eq!(client.list_strategies().len(), 0);
+}
+
+#[test]
+fn list_strategies_includes_deregistered_in_id_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, first) = register_mock_strategy(&env, &client, &admin, &token);
+    let (_, second) = register_mock_strategy(&env, &client, &admin, &token);
+    let (_, third) = register_mock_strategy(&env, &client, &admin, &token);
+
+    env.ledger().set_timestamp(9_000);
+    client.deregister_strategy(&admin, &second);
+
+    let all = client.list_strategies();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all.get(0).unwrap().id, first);
+    assert_eq!(all.get(1).unwrap().id, second);
+    assert_eq!(all.get(2).unwrap().id, third);
+
+    // Deregistered strategies stay listed; callers filter on `deregistered_at`.
+    assert_eq!(all.get(0).unwrap().deregistered_at, None);
+    assert_eq!(all.get(1).unwrap().deregistered_at, Some(9_000));
+    assert_eq!(all.get(2).unwrap().deregistered_at, None);
+    assert_eq!(client.get_strategy(&second).deregistered_at, Some(9_000));
+
+    let live = all.iter().filter(|s| s.deregistered_at.is_none()).count();
+    assert_eq!(live, 2);
+}
+
+#[test]
 fn set_active_strategy_emits_changed_and_rejects_second_activation() {
     let env = Env::default();
     env.mock_all_auths();
