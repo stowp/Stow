@@ -11,9 +11,8 @@
 //! contract implementing the `deposit` / `withdraw` / `balance` interface
 //! documented in `README.md` under "Strategy interface", plus one test-only
 //! hook (`set_reported_balance`) to simulate yield or loss. It is enough for
-//! the circuit breaker, deposit forwarding, and claim-side liquidity tests.
-//! `harvest` / `migrate_strategy` tests stay ignored until those entrypoints
-//! are implemented.
+//! the circuit breaker, deposit forwarding, claim-side liquidity, and
+//! strategy migration tests.
 
 use soroban_sdk::testutils::{
     Address as _, Events as _, Ledger, LedgerInfo, MockAuth, MockAuthInvoke,
@@ -1470,11 +1469,170 @@ fn assert_auth_harness_untouched(
 /// `Error::Unauthorized` — a valid signature is not a substitute for being
 /// the right account.
 #[test]
-#[ignore = "TODO(issue): implement strategy::migrate_strategy — needs two mock strategies"]
 fn strategy_migration_preserves_total_assets() {
-    todo!(
-        "register two mock strategies, deposit, migrate_strategy, assert total_assets() unchanged"
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(5_000);
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (old, old_id) = activate_mock_strategy(&env, &client, &admin, &token);
+    let (new, new_id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+    // Old strategy earned 200 of yield, backed by real tokens.
+    mint(&env, &token, &old.address, 200);
+    old.set_reported_balance(&client.address, &1_200);
+
+    let assets_before = client.total_assets();
+    let shares_before = client.total_shares();
+    let rate_before = client.exchange_rate();
+    assert_eq!(assets_before, 1_200);
+
+    client.migrate_strategy(&admin, &new_id);
+
+    let (topics, data) = single_event(&env, &client, TOPIC_STRATEGY_CHANGED);
+    let expected_topics: Vec<Val> = (Symbol::new(&env, TOPIC_STRATEGY_CHANGED),).into_val(&env);
+    assert_eq!(topics, expected_topics);
+    assert_eq!(
+        decode::<(Option<u64>, Option<u64>, i128, u64)>(&env, &data),
+        (Some(old_id), Some(new_id), 1_200, 5_000)
     );
+
+    // Everything moved old -> new; nothing left idle or behind.
+    assert_eq!(active_strategy_id(&env, &client), Some(new_id));
+    assert_eq!(old.balance(&client.address), 0);
+    assert_eq!(balance_of(&env, &token, &old.address), 0);
+    assert_eq!(new.balance(&client.address), 1_200);
+    assert_eq!(balance_of(&env, &token, &new.address), 1_200);
+    assert_eq!(balance_of(&env, &token, &client.address), 0);
+
+    assert_eq!(client.total_assets(), assets_before);
+    assert_eq!(client.total_shares(), shares_before);
+    assert_eq!(client.exchange_rate(), rate_before);
+
+    // Both strategies stay registered; the old one can now be deregistered.
+    assert!(client.get_strategy(&old_id).deregistered_at.is_none());
+    client.deregister_strategy(&admin, &old_id);
+
+    // New deposits route to the new strategy.
+    let more = funded_user(&env, &token, 300);
+    client.deposit(&more, &300);
+    assert_eq!(new.balance(&client.address), 1_500);
+}
+
+/// A withdrawal haircut on the old strategy reduces `total_assets()` by
+/// exactly the haircut; only what actually arrived is deposited onward.
+#[test]
+fn strategy_migration_absorbs_old_strategy_withdrawal_fee() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+
+    let old_address = setup_crate_mock_strategy(&env);
+    let old = crate::mock_strategy::MockStrategyClient::new(&env, &old_address);
+    old.init(&token);
+    old.set_withdraw_fee_bps(&100); // 1%
+    let new_address = setup_crate_mock_strategy(&env);
+    let new = crate::mock_strategy::MockStrategyClient::new(&env, &new_address);
+    new.init(&token);
+
+    let old_id = client.register_strategy(&admin, &old_address, &String::from_str(&env, "old"));
+    let new_id = client.register_strategy(&admin, &new_address, &String::from_str(&env, "new"));
+    client.set_active_strategy(&admin, &old_id);
+
+    let user = funded_user(&env, &token, 10_000);
+    client.deposit(&user, &10_000);
+    assert_eq!(client.total_assets(), 10_000);
+
+    client.migrate_strategy(&admin, &new_id);
+
+    let (_, data) = single_event(&env, &client, TOPIC_STRATEGY_CHANGED);
+    assert_eq!(
+        decode::<(Option<u64>, Option<u64>, i128, u64)>(&env, &data),
+        (Some(old_id), Some(new_id), 9_900, env.ledger().timestamp())
+    );
+    assert_eq!(new.balance(&client.address), 9_900);
+    assert_eq!(balance_of(&env, &token, &new_address), 9_900);
+    assert_eq!(balance_of(&env, &token, &client.address), 0);
+    assert_eq!(client.total_assets(), 10_000 - 100);
+    assert_eq!(client.total_shares(), 10_000);
+}
+
+#[test]
+fn migrate_strategy_with_nothing_deployed_switches_without_moving_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (old, _) = activate_mock_strategy(&env, &client, &admin, &token);
+    let (new, new_id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    client.migrate_strategy(&admin, &new_id);
+
+    assert_eq!(active_strategy_id(&env, &client), Some(new_id));
+    assert_eq!(old.balance(&client.address), 0);
+    assert_eq!(new.balance(&client.address), 0);
+    assert_eq!(client.total_assets(), 0);
+}
+
+#[test]
+fn migrate_strategy_guards() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id_a) = register_mock_strategy(&env, &client, &admin, &token);
+    let (_, id_b) = register_mock_strategy(&env, &client, &admin, &token);
+    let (_, id_c) = register_mock_strategy(&env, &client, &admin, &token);
+
+    // Nothing active yet: first activation must go through set_active_strategy.
+    assert_eq!(
+        client.try_migrate_strategy(&admin, &id_b),
+        Err(Ok(Error::StrategyNotFound))
+    );
+
+    client.set_active_strategy(&admin, &id_a);
+    assert_eq!(
+        client.try_migrate_strategy(&Address::generate(&env), &id_b),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        client.try_migrate_strategy(&admin, &id_a),
+        Err(Ok(Error::StrategyAlreadyActive))
+    );
+    assert_eq!(
+        client.try_migrate_strategy(&admin, &999),
+        Err(Ok(Error::StrategyNotFound))
+    );
+    client.deregister_strategy(&admin, &id_c);
+    assert_eq!(
+        client.try_migrate_strategy(&admin, &id_c),
+        Err(Ok(Error::StrategyNotFound))
+    );
+
+    assert_eq!(active_strategy_id(&env, &client), Some(id_a));
+}
+
+/// Unharvested yield from the old strategy still reaches the next
+/// `harvest` (and its performance fee) after a migration.
+#[test]
+fn migrate_strategy_carries_unharvested_yield_into_next_harvest() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (old, _) = activate_mock_strategy(&env, &client, &admin, &token);
+    let (_, new_id) = register_mock_strategy(&env, &client, &admin, &token);
+    client.set_performance_fee_bps(&admin, &1_000); // 10%
+
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+    client.harvest(&admin); // checkpoint the deposit
+    let checkpoint = client.fees_accrued();
+
+    mint(&env, &token, &old.address, 100);
+    old.set_reported_balance(&client.address, &1_100);
+    client.migrate_strategy(&admin, &new_id);
+
+    assert_eq!(client.harvest(&admin), 100);
+    assert_eq!(client.fees_accrued() - checkpoint, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -2223,13 +2381,14 @@ fn migrate_strategy_emits_strategy_changed_with_from_and_to() {
     let events = env.events().all();
     let (contract_id, topics, data) = events.last().unwrap().clone();
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
-        (crate::events::TOPIC_STRATEGY_CHANGED,).into_val(&env);
-    let decoded: (Option<u64>, u64, u64) =
+        (Symbol::new(&env, crate::events::TOPIC_STRATEGY_CHANGED),).into_val(&env);
+    let decoded: (Option<u64>, Option<u64>, i128, u64) =
         soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
 
     assert_eq!(contract_id, client.address);
     assert_eq!(topics, expected_topics);
-    assert_eq!(decoded, (Some(id_a), id_b, now));
+    // Ledger-only mocks: nothing was deployed, so nothing moved.
+    assert_eq!(decoded, (Some(id_a), Some(id_b), 0, now));
 }
 
 #[test]
