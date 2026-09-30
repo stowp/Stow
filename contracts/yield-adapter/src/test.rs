@@ -111,8 +111,8 @@ mod mock_strategy {
 // knobs (simulated yield/loss, failure injection, withdrawal haircut,
 // token-backed mode).
 
-fn setup_mock_strategy(env: &Env) -> Address {
-    env.register(MockStrategy, ())
+fn setup_mock_strategy(env: &Env, token: &Address) -> Address {
+    env.register(MockStrategy, (token.clone(),))
 }
 
 // ---------------------------------------------------------------------------
@@ -2107,12 +2107,12 @@ fn setup_auth_harness(env: &Env) -> (YieldAdapterClient, Address, Address, Addre
     let (client, admin, _treasury, token) = setup_with_token(env);
     let active_id = client.register_strategy(
         &admin,
-        &setup_mock_strategy(env),
+        &setup_mock_strategy(env, &token),
         &soroban_sdk::String::from_str(env, "active"),
     );
     let standby_id = client.register_strategy(
         &admin,
-        &setup_mock_strategy(env),
+        &setup_mock_strategy(env, &token),
         &soroban_sdk::String::from_str(env, "standby"),
     );
     client.set_active_strategy(&admin, &active_id);
