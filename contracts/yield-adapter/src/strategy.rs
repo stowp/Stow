@@ -251,75 +251,71 @@ pub fn set_active_strategy(env: &Env, caller: Address, strategy_id: u64) -> Resu
 /// - Must preserve `total_assets()` (modulo the old strategy's own
 ///   withdrawal fees/slippage, if any — see the "Strategy interface" doc for
 ///   how those are surfaced and accounted for).
-/// - Emits a `strategy_changed` event with both `from` and `to` ids.
+/// - Emits a `strategy_changed` event with both `from` and `to` ids and
+///   `assets_moved` equal to what actually arrived from the old strategy
+///   (and was deposited into the new one).
+/// - Errors `Error::Paused` while paused.
+/// - Errors `Error::StrategyNotFound` if there is no active strategy to
+///   migrate from (use `set_active_strategy` for a first activation), or if
+///   `new_strategy_id` is unknown or deregistered.
+/// - Errors `Error::StrategyAlreadyActive` if `new_strategy_id` is already
+///   the active strategy.
+///
+/// The amount moved is measured from the adapter's own token balance (see
+/// [`withdraw_from_strategy`]), never trusted from the old strategy, so a
+/// withdrawal haircut shows up as a smaller `assets_moved` and a matching
+/// drop in `total_assets()` rather than as an over-deposit that would fail.
+/// The whole call is atomic: if either strategy call fails, nothing moves
+/// and `ActiveStrategy` is unchanged.
+///
+/// `DeployedBalance` (harvest's yield checkpoint) is carried over, reduced
+/// by the haircut (`deployed - moved`, floored at `0`): the next `harvest`
+/// still reports — and charges the performance fee on — yield the old
+/// strategy earned since the last harvest, but the migration haircut is
+/// not re-reported as a harvest loss (it already hit `total_assets()` and
+/// is visible in the `strategy_changed` event).
 pub fn migrate_strategy(env: &Env, caller: Address, new_strategy_id: u64) -> Result<(), Error> {
+    extend_instance_ttl(env);
     admin::require_admin(env, &caller)?;
     admin::require_not_paused(env)?;
 
-    let old_id: u64 = env
-        .storage()
-        .instance()
-        .get(&DataKey::ActiveStrategy)
-        .ok_or(Error::StrategyNotFound)?;
+    let old_id = active_strategy_id(env).ok_or(Error::StrategyNotFound)?;
     if old_id == new_strategy_id {
         return Err(Error::StrategyAlreadyActive);
     }
 
-    let new_info: StrategyInfo = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Strategy(new_strategy_id))
-        .ok_or(Error::StrategyNotFound)?;
+    let new_info = get_strategy(env, new_strategy_id)?;
     if new_info.deregistered_at.is_some() {
         return Err(Error::StrategyNotFound);
     }
-    let old_info: StrategyInfo = env
-        .storage()
-        .persistent()
-        .get(&DataKey::Strategy(old_id))
-        .ok_or(Error::StrategyNotFound)?;
+    let old_info = get_strategy(env, old_id)?;
 
-    let contract_address = env.current_contract_address();
-
-    // Pull the adapter's full balance out of the old strategy, back into
-    // this contract, then push it all into the new one. The strategy
-    // interface's balance()/withdraw()/deposit() shapes are documented in
-    // README.md's "Strategy interface" section.
-    let deployed: i128 = env.invoke_contract(
-        &old_info.address,
-        &soroban_sdk::Symbol::new(env, "balance"),
-        soroban_sdk::vec![env, soroban_sdk::IntoVal::into_val(&contract_address, env)],
-    );
-    if deployed > 0 {
-        let () = env.invoke_contract(
-            &old_info.address,
-            &soroban_sdk::Symbol::new(env, "withdraw"),
-            soroban_sdk::vec![
-                env,
-                soroban_sdk::IntoVal::into_val(&contract_address, env),
-                soroban_sdk::IntoVal::into_val(&deployed, env)
-            ],
-        );
-        let () = env.invoke_contract(
-            &new_info.address,
-            &soroban_sdk::Symbol::new(env, "deposit"),
-            soroban_sdk::vec![
-                env,
-                soroban_sdk::IntoVal::into_val(&contract_address, env),
-                soroban_sdk::IntoVal::into_val(&deployed, env)
-            ],
-        );
+    let deployed = strategy_balance(env, &old_info.address);
+    let moved = if deployed > 0 {
+        withdraw_from_strategy(env, &old_info.address, deployed)?
+    } else {
+        0
+    };
+    if moved > 0 {
+        deploy_to_strategy(env, &new_info.address, moved)?;
     }
 
-    extend_instance_ttl(env);
+    let haircut = deployed.checked_sub(moved).ok_or(Error::Overflow)?;
+    let tracked: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::DeployedBalance)
+        .unwrap_or(0);
+    let rebased = tracked.checked_sub(haircut).ok_or(Error::Overflow)?.max(0);
+
     env.storage()
         .instance()
         .set(&DataKey::ActiveStrategy, &new_strategy_id);
+    env.storage()
+        .instance()
+        .set(&DataKey::DeployedBalance, &rebased);
 
-    env.events().publish(
-        (events::TOPIC_STRATEGY_CHANGED,),
-        (Some(old_id), new_strategy_id, env.ledger().timestamp()),
-    );
+    events::publish_strategy_changed(env, Some(old_id), Some(new_strategy_id), moved);
 
     Ok(())
 }
