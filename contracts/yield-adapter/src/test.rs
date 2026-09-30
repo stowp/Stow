@@ -466,6 +466,98 @@ fn unauthorized_access_rejected() {
 }
 
 // ---------------------------------------------------------------------------
+// storage — id allocation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn next_id_starts_at_one_and_strictly_increases() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || {
+        // Counter reads `0` when absent, so the first allocation is `1`.
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<_, u64>(&DataKey::NextStrategyId),
+            None
+        );
+        let mut previous = 0u64;
+        for expected in 1..=5u64 {
+            let id = crate::storage::next_id(&env, DataKey::NextStrategyId).unwrap();
+            assert_eq!(id, expected);
+            assert!(id > previous);
+            previous = id;
+        }
+        // The counter persists the last id handed out.
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<_, u64>(&DataKey::NextStrategyId),
+            Some(5)
+        );
+    });
+}
+
+#[test]
+fn next_id_counters_are_independent() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || {
+        let s1 = crate::storage::next_id(&env, DataKey::NextStrategyId).unwrap();
+        let w1 = crate::storage::next_id(&env, DataKey::NextWithdrawId).unwrap();
+        let s2 = crate::storage::next_id(&env, DataKey::NextStrategyId).unwrap();
+        let s3 = crate::storage::next_id(&env, DataKey::NextStrategyId).unwrap();
+        let w2 = crate::storage::next_id(&env, DataKey::NextWithdrawId).unwrap();
+
+        // Each counter starts at 1 and advances only on its own allocations.
+        assert_eq!((s1, s2, s3), (1, 2, 3));
+        assert_eq!((w1, w2), (1, 2));
+    });
+}
+
+#[test]
+fn next_id_rejects_overflow_without_wrapping() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::NextWithdrawId, &u64::MAX);
+        assert_eq!(
+            crate::storage::next_id(&env, DataKey::NextWithdrawId),
+            Err(Error::Overflow)
+        );
+        // The counter is left where it was — no id is ever reused.
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<_, u64>(&DataKey::NextWithdrawId),
+            Some(u64::MAX)
+        );
+    });
+}
+
+#[test]
+fn strategy_and_withdraw_ids_do_not_collide_through_entrypoints() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+
+    let (_, strategy_1) = register_mock_strategy(&env, &client, &admin, &token);
+    let request_1 = client.request_withdraw(&user, &100);
+    let (_, strategy_2) = register_mock_strategy(&env, &client, &admin, &token);
+    let request_2 = client.request_withdraw(&user, &100);
+
+    assert_eq!((strategy_1, strategy_2), (1, 2));
+    assert_eq!((request_1, request_2), (1, 2));
+}
+
+// ---------------------------------------------------------------------------
 // strategy registry
 // ---------------------------------------------------------------------------
 
