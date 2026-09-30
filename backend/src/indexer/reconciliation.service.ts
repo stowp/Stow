@@ -77,7 +77,9 @@ export class ReconciliationService {
 
     return candidates.filter(
       (id): id is string =>
-        typeof id === 'string' && id.length > 0 && id !== 'your-contract-id-here',
+        typeof id === 'string' &&
+        id.length > 0 &&
+        id !== 'your-contract-id-here',
     );
   }
 
@@ -139,7 +141,7 @@ export class ReconciliationService {
 
     if (backfilledCount > 0) {
       this.logger.log(
-        `Reconciliation backfilled ${backfilledCount} events for ${contractId} (ledgers ${fromLedger}–${toLedger})`,
+        `Reconciliation backfilled ${backfilledCount} events for ${contractId} (ledgers ${fromLedger}-${toLedger})`,
       );
     }
   }
@@ -276,6 +278,206 @@ export class ReconciliationService {
     }
   }
 
-  private async fetchLedger
+  /**
+   * Looks up the hash of a single ledger via getLedgers, used both to seed
+   * last_indexed_ledger_hash after a normal reconciliation pass and to
+   * detect a reorg by comparing against a previously stored hash.
+   *
+   * Returns null on any failure (HTTP error, malformed body, empty result,
+   * non-string hash) so callers treat "could not determine the hash" the
+   * same way regardless of cause: skip silently rather than misreport a
+   * reorg that cannot actually be confirmed.
+   */
+  private async fetchLedgerHash(
+    rpcUrl: string,
+    ledger: number,
+  ): Promise<string | null> {
+    try {
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'insightarena-reconciliation-ledger-hash',
+          method: 'getLedgers',
+          params: {
+            startLedger: ledger,
+            limit: 1,
+          },
+        }),
+      });
 
-/* … truncated 5957 chars — edit only what you need near the top … */
+      if (!response.ok) return null;
+
+      const body = (await response.json()) as {
+        result?: { ledgers?: Array<{ hash?: unknown }> };
+      };
+
+      const hash = body.result?.ledgers?.[0]?.hash;
+      return typeof hash === 'string' ? hash : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Detects a chain reorg by comparing the hash the chain now reports for
+   * the last-indexed ledger against the hash stored when that ledger was
+   * indexed. A mismatch means the chain has forked below last_indexed_ledger
+   * and every ContractEvent row indexed at or after the fork point reflects
+   * a branch that no longer exists.
+   *
+   * On divergence, rolls back to fork_ledger = last_indexed_ledger -
+   * rollbackDepth (never below 0): deep enough that the fork point itself is
+   * assumed stable rather than re-checking hash-by-hash backwards, which
+   * would need one RPC round trip per ledger for what is, in practice, a
+   * rare event. Deletes every ContractEvent past the fork point so the next
+   * reconciliation pass's backfillGap re-derives them from the (now
+   * canonical) chain, rewinds both the reconciliation checkpoint and the
+   * indexer's own key/value checkpoint to the fork point so they cannot
+   * disagree about where indexing resumes, and persists a ReorgEvent audit
+   * row.
+   *
+   * Returns null when no reorg is found (including "cannot tell yet",
+   * either because there is no stored hash to compare against on a fresh
+   * checkpoint, or because the RPC hash lookup itself failed), or the saved
+   * ReorgEvent when a rollback was performed.
+   */
+  private async detectAndHandleReorg(
+    contractId: string,
+    checkpoint: ChainSyncCheckpoint,
+    rpcUrl: string,
+  ): Promise<ReorgEvent | null> {
+    const previousHash = checkpoint.last_indexed_ledger_hash;
+    if (!previousHash) return null;
+
+    const previousLedger = Number(checkpoint.last_indexed_ledger);
+    const currentHash = await this.fetchLedgerHash(rpcUrl, previousLedger);
+    if (currentHash === null) return null;
+
+    if (currentHash === previousHash) return null;
+
+    this.logger.warn(
+      `Reorg detected for ${contractId} at ledger ${previousLedger}: stored hash ${previousHash}, chain now reports ${currentHash}`,
+    );
+
+    const rollbackDepth =
+      this.configService.get<number>('INDEXER_REORG_ROLLBACK_DEPTH') ??
+      DEFAULT_REORG_ROLLBACK_DEPTH;
+    const forkLedger = Math.max(previousLedger - rollbackDepth, 0);
+
+    const deleteResult = await this.contractEventRepository.delete({
+      ledger: MoreThan(forkLedger),
+    });
+    const rolledBackCount = deleteResult.affected ?? 0;
+
+    const forkHash = await this.fetchLedgerHash(rpcUrl, forkLedger);
+
+    checkpoint.last_indexed_ledger = forkLedger;
+    checkpoint.last_indexed_ledger_hash = forkHash;
+    await this.checkpointRepository.save(checkpoint);
+
+    await this.indexerCheckpointRepository.update(
+      { key: CHECKPOINT_LEDGER_KEY },
+      { value: forkLedger },
+    );
+
+    const reorgEvent = this.reorgEventRepository.create({
+      contract_id: contractId,
+      fork_ledger: forkLedger,
+      previous_ledger: previousLedger,
+      previous_hash: previousHash,
+      new_hash: currentHash,
+      rolled_back_event_count: rolledBackCount,
+    });
+
+    const saved = await this.reorgEventRepository.save(reorgEvent);
+
+    this.logger.warn(
+      `Reorg rollback for ${contractId}: rewound to ledger ${forkLedger}, deleted ${rolledBackCount} event(s)`,
+    );
+
+    return saved;
+  }
+
+  /**
+   * Recent reorg audit history, most recent first. contractId narrows to a
+   * single contract; omitted, every contract's reorgs are returned.
+   */
+  async getReorgEvents(contractId?: string, limit = 50): Promise<ReorgEvent[]> {
+    return this.reorgEventRepository.find({
+      where: contractId ? { contract_id: contractId } : {},
+      order: { detected_at: 'DESC' },
+      take: limit,
+    });
+  }
+
+  private async getOrCreateCheckpoint(
+    contractId: string,
+  ): Promise<ChainSyncCheckpoint> {
+    let checkpoint = await this.checkpointRepository.findOne({
+      where: { contract_id: contractId },
+    });
+
+    if (!checkpoint) {
+      checkpoint = this.checkpointRepository.create({
+        contract_id: contractId,
+        last_indexed_ledger: 0,
+        last_indexed_ledger_hash: null,
+        chain_head_ledger: 0,
+        last_reconciled_from: 0,
+        last_reconciled_to: 0,
+        last_reconciled_at: null,
+        last_backfill_count: 0,
+      });
+      await this.checkpointRepository.save(checkpoint);
+    }
+
+    return checkpoint;
+  }
+
+  async advanceCheckpoint(contractId: string, ledger: number): Promise<void> {
+    const checkpoint = await this.getOrCreateCheckpoint(contractId);
+    if (ledger > Number(checkpoint.last_indexed_ledger)) {
+      checkpoint.last_indexed_ledger = ledger;
+      await this.checkpointRepository.save(checkpoint);
+    }
+  }
+
+  isEnabled(): boolean {
+    const enabled = this.configService.get<string>('RECONCILE_ENABLED');
+    return enabled !== 'false' && enabled !== '0';
+  }
+
+  getReconcileWindow(): number {
+    const window = this.configService.get<number>('RECONCILE_WINDOW');
+    return window && window > 0 ? window : DEFAULT_RECONCILE_WINDOW;
+  }
+
+  getReconcileIntervalMs(): number {
+    const interval = this.configService.get<number>('RECONCILE_INTERVAL_MS');
+    return interval && interval > 0 ? interval : DEFAULT_RECONCILE_INTERVAL_MS;
+  }
+
+  getStatus(): {
+    enabled: boolean;
+    is_running: boolean;
+    last_run_at: string | null;
+    last_backfill_count: number;
+  } {
+    return {
+      enabled: this.isEnabled(),
+      is_running: this.isRunning,
+      last_run_at: this.lastRunAt?.toISOString() ?? null,
+      last_backfill_count: this.lastBackfillCount,
+    };
+  }
+
+  async getCheckpointForContract(
+    contractId: string,
+  ): Promise<ChainSyncCheckpoint | null> {
+    return this.checkpointRepository.findOne({
+      where: { contract_id: contractId },
+    });
+  }
+}

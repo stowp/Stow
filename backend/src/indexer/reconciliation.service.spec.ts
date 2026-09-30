@@ -4,7 +4,10 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ReconciliationService } from './reconciliation.service';
 import { ChainSyncCheckpoint } from './entities/chain-sync-checkpoint.entity';
-import { ContractEvent } from './entities/contract-event.entity';
+import {
+  ContractEvent,
+  ContractEventStatus,
+} from './entities/contract-event.entity';
 import { ReorgEvent } from './entities/reorg-event.entity';
 import { IndexerCheckpoint } from './entities/indexer-checkpoint.entity';
 import { CHECKPOINT_LEDGER_KEY } from './indexer.service';
@@ -617,6 +620,145 @@ describe('ReconciliationService', () => {
       expect(reorgEventRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({ fork_ledger: 90, previous_ledger: 100 }),
       );
+    });
+  });
+
+  describe('runReconciliation gap backfill integration (issue #105)', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('detects a gap between the checkpoint and the chain head, backfills the missing events, and advances the checkpoint', async () => {
+      // No stored hash yet: detectAndHandleReorg has nothing to compare
+      // against, so this run is purely a gap backfill, not a reorg.
+      const checkpoint = {
+        contract_id: 'CTEST',
+        last_indexed_ledger: 100,
+        last_indexed_ledger_hash: null,
+        chain_head_ledger: 100,
+      } as ChainSyncCheckpoint;
+
+      configService.get.mockImplementation((key: string) => {
+        if (key === 'SOROBAN_RPC_URL') return 'https://rpc.example';
+        return undefined;
+      });
+
+      checkpointRepository.findOne.mockResolvedValue(checkpoint);
+      checkpointRepository.save.mockImplementation(
+        async (cp) => cp as ChainSyncCheckpoint,
+      );
+      contractEventRepository.findOne.mockResolvedValue(null);
+      contractEventRepository.create.mockImplementation(
+        (input) => input as ContractEvent,
+      );
+      contractEventRepository.save.mockImplementation(
+        async (e) => e as ContractEvent,
+      );
+
+      // Ledger 105's deposit event was never indexed (the "injected gap"):
+      // the chain has moved to 110, but the checkpoint is still at 100.
+      const missingEvent = {
+        ledger: 105,
+        log_index: 0,
+        type: 'deposit',
+        tx_hash: '0xgap',
+        value: { amount: '50' },
+      };
+
+      jest
+        .spyOn(global, 'fetch')
+        .mockImplementation(async (_url, init: any) => {
+          const body = JSON.parse(init.body as string);
+
+          // getEvents calls: chain-head probe (limit 1) vs the backfill sweep.
+          if (body.params.limit === 1) {
+            return {
+              ok: true,
+              json: async () => ({ result: { events: [], latestLedger: 110 } }),
+            } as unknown as Response;
+          }
+
+          return {
+            ok: true,
+            json: async () => ({ result: { events: [missingEvent] } }),
+          } as unknown as Response;
+        });
+
+      await (service as any).runReconciliation('CTEST');
+
+      // The gap event was persisted as a real, indexable ContractEvent row.
+      expect(contractEventRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ledger: 105,
+          log_index: 0,
+          event_type: 'deposit',
+          tx_hash: '0xgap',
+          status: ContractEventStatus.PENDING,
+        }),
+      );
+      expect(contractEventRepository.save).toHaveBeenCalled();
+
+      // The checkpoint advanced past the repaired gap, up to the window's
+      // end (fromLedger 101 + default window 200 - 1, capped at chain head
+      // 110), not left stranded at 100.
+      expect(checkpoint.last_indexed_ledger).toBe(110);
+      expect(checkpoint.last_backfill_count).toBe(1);
+      expect(checkpoint.last_reconciled_from).toBe(101);
+      expect(checkpoint.last_reconciled_to).toBe(110);
+    });
+
+    it('does not re-persist an already-indexed event when reconciling the same range again', async () => {
+      const checkpoint = {
+        contract_id: 'CTEST',
+        last_indexed_ledger: 100,
+        last_indexed_ledger_hash: null,
+        chain_head_ledger: 100,
+      } as ChainSyncCheckpoint;
+
+      configService.get.mockImplementation((key: string) => {
+        if (key === 'SOROBAN_RPC_URL') return 'https://rpc.example';
+        return undefined;
+      });
+
+      checkpointRepository.findOne.mockResolvedValue(checkpoint);
+      checkpointRepository.save.mockImplementation(
+        async (cp) => cp as ChainSyncCheckpoint,
+      );
+      // Already durable from an earlier pass: findOne finds it, so it must
+      // not be re-created.
+      contractEventRepository.findOne.mockResolvedValue({
+        ledger: 105,
+        log_index: 0,
+      } as ContractEvent);
+
+      jest
+        .spyOn(global, 'fetch')
+        .mockImplementation(async (_url, init: any) => {
+          const body = JSON.parse(init.body as string);
+          if (body.params.limit === 1) {
+            return {
+              ok: true,
+              json: async () => ({ result: { events: [], latestLedger: 110 } }),
+            } as unknown as Response;
+          }
+          return {
+            ok: true,
+            json: async () => ({
+              result: {
+                events: [{ ledger: 105, log_index: 0, type: 'deposit' }],
+              },
+            }),
+          } as unknown as Response;
+        });
+
+      await (service as any).runReconciliation('CTEST');
+
+      expect(contractEventRepository.create).not.toHaveBeenCalled();
+      expect(contractEventRepository.save).not.toHaveBeenCalled();
+      // The checkpoint still advances: the event is already durable from its
+      // first delivery, so re-observing it is a no-op rather than a stall.
+      expect(checkpoint.last_indexed_ledger).toBe(110);
+      expect(checkpoint.last_backfill_count).toBe(0);
     });
   });
 });
