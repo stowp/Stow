@@ -466,6 +466,172 @@ fn unauthorized_access_rejected() {
 }
 
 // ---------------------------------------------------------------------------
+// storage — config accessors and TTL bumping
+// ---------------------------------------------------------------------------
+
+use crate::storage::{
+    DAY_IN_LEDGERS, INSTANCE_BUMP_AMOUNT, INSTANCE_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT,
+    PERSISTENT_LIFETIME_THRESHOLD,
+};
+
+/// Advance the ledger sequence far enough that every entry bumped to a full
+/// `*_BUMP_AMOUNT` has decayed below its lifetime threshold.
+fn age_past_ttl_thresholds(env: &Env) {
+    env.ledger()
+        .with_mut(|l| l.sequence_number += 2 * DAY_IN_LEDGERS);
+}
+
+fn instance_ttl(env: &Env, client: &YieldAdapterClient) -> u32 {
+    use soroban_sdk::testutils::storage::Instance as _;
+    env.as_contract(&client.address, || env.storage().instance().get_ttl())
+}
+
+fn persistent_ttl(env: &Env, client: &YieldAdapterClient, key: &DataKey) -> u32 {
+    use soroban_sdk::testutils::storage::Persistent as _;
+    env.as_contract(&client.address, || env.storage().persistent().get_ttl(key))
+}
+
+#[test]
+fn ttl_constants_leave_a_one_day_refresh_window() {
+    assert_eq!(INSTANCE_BUMP_AMOUNT - INSTANCE_LIFETIME_THRESHOLD, DAY_IN_LEDGERS);
+    assert_eq!(PERSISTENT_BUMP_AMOUNT - PERSISTENT_LIFETIME_THRESHOLD, DAY_IN_LEDGERS);
+}
+
+#[test]
+fn token_and_admin_accessors_read_back_initialized_config() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || {
+        assert_eq!(crate::storage::get_token(&env), None);
+        assert_eq!(crate::storage::get_admin(&env), None);
+        assert_eq!(crate::storage::get_treasury(&env), None);
+    });
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    client.initialize(&admin, &treasury, &token);
+
+    env.as_contract(&client.address, || {
+        assert_eq!(crate::storage::get_token(&env), Some(token.clone()));
+        assert_eq!(crate::storage::get_admin(&env), Some(admin.clone()));
+        assert_eq!(crate::storage::get_treasury(&env), Some(treasury.clone()));
+    });
+}
+
+#[test]
+fn set_token_persists_and_bumps_instance_ttl() {
+    let env = Env::default();
+    let client = setup(&env);
+    let token = Address::generate(&env);
+
+    env.as_contract(&client.address, || {
+        crate::storage::set_token(&env, &token);
+        assert_eq!(crate::storage::get_token(&env), Some(token.clone()));
+    });
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn extend_instance_ttl_refreshes_only_below_threshold() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || crate::storage::extend_instance_ttl(&env));
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+
+    // Still above the threshold: a second bump is a no-op.
+    env.ledger().with_mut(|l| l.sequence_number += 10);
+    env.as_contract(&client.address, || crate::storage::extend_instance_ttl(&env));
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT - 10);
+
+    // Decayed below the threshold: bumped back to the full amount.
+    age_past_ttl_thresholds(&env);
+    assert!(instance_ttl(&env, &client) < INSTANCE_LIFETIME_THRESHOLD);
+    env.as_contract(&client.address, || crate::storage::extend_instance_ttl(&env));
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn state_changing_entrypoints_bump_instance_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, _token) = setup_with_token(&env);
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+
+    age_past_ttl_thresholds(&env);
+    assert!(instance_ttl(&env, &client) < INSTANCE_LIFETIME_THRESHOLD);
+    client.set_performance_fee_bps(&admin, &500);
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+
+    age_past_ttl_thresholds(&env);
+    client.set_paused(&admin, &true);
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn strategy_record_ttl_bumped_on_write_and_read() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+    let key = DataKey::Strategy(id);
+
+    // Write (register) bumps to the full amount.
+    assert_eq!(persistent_ttl(&env, &client, &key), PERSISTENT_BUMP_AMOUNT);
+
+    // Read (get_strategy) refreshes a decayed entry.
+    age_past_ttl_thresholds(&env);
+    assert!(persistent_ttl(&env, &client, &key) < PERSISTENT_LIFETIME_THRESHOLD);
+    client.get_strategy(&id);
+    assert_eq!(persistent_ttl(&env, &client, &key), PERSISTENT_BUMP_AMOUNT);
+
+    // Write (set_strategy_deposit_cap) refreshes it too.
+    age_past_ttl_thresholds(&env);
+    client.set_strategy_deposit_cap(&admin, &id, &1_000);
+    assert_eq!(persistent_ttl(&env, &client, &key), PERSISTENT_BUMP_AMOUNT);
+}
+
+#[test]
+fn position_and_withdraw_request_ttl_bumped_on_write_and_read() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+    let request_id = client.request_withdraw(&user, &400);
+
+    let position_key = DataKey::Position(user.clone());
+    let request_key = DataKey::WithdrawRequest(request_id);
+    assert_eq!(
+        persistent_ttl(&env, &client, &position_key),
+        PERSISTENT_BUMP_AMOUNT
+    );
+    assert_eq!(
+        persistent_ttl(&env, &client, &request_key),
+        PERSISTENT_BUMP_AMOUNT
+    );
+
+    age_past_ttl_thresholds(&env);
+    assert!(persistent_ttl(&env, &client, &position_key) < PERSISTENT_LIFETIME_THRESHOLD);
+    assert!(persistent_ttl(&env, &client, &request_key) < PERSISTENT_LIFETIME_THRESHOLD);
+
+    client.get_position(&user);
+    client.get_withdraw_request(&request_id);
+    assert_eq!(
+        persistent_ttl(&env, &client, &position_key),
+        PERSISTENT_BUMP_AMOUNT
+    );
+    assert_eq!(
+        persistent_ttl(&env, &client, &request_key),
+        PERSISTENT_BUMP_AMOUNT
+    );
+}
+
+// ---------------------------------------------------------------------------
 // storage — id allocation
 // ---------------------------------------------------------------------------
 
