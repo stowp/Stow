@@ -598,6 +598,264 @@ fn unauthorized_access_rejected() {
 }
 
 // ---------------------------------------------------------------------------
+// storage — config accessors and TTL bumping
+// ---------------------------------------------------------------------------
+
+use crate::storage::{
+    DAY_IN_LEDGERS, INSTANCE_BUMP_AMOUNT, INSTANCE_LIFETIME_THRESHOLD, PERSISTENT_BUMP_AMOUNT,
+    PERSISTENT_LIFETIME_THRESHOLD,
+};
+
+/// Advance the ledger sequence far enough that every entry bumped to a full
+/// `*_BUMP_AMOUNT` has decayed below its lifetime threshold.
+fn age_past_ttl_thresholds(env: &Env) {
+    env.ledger()
+        .with_mut(|l| l.sequence_number += 2 * DAY_IN_LEDGERS);
+}
+
+fn instance_ttl(env: &Env, client: &YieldAdapterClient) -> u32 {
+    use soroban_sdk::testutils::storage::Instance as _;
+    env.as_contract(&client.address, || env.storage().instance().get_ttl())
+}
+
+fn persistent_ttl(env: &Env, client: &YieldAdapterClient, key: &DataKey) -> u32 {
+    use soroban_sdk::testutils::storage::Persistent as _;
+    env.as_contract(&client.address, || env.storage().persistent().get_ttl(key))
+}
+
+#[test]
+fn ttl_constants_leave_a_one_day_refresh_window() {
+    assert_eq!(INSTANCE_BUMP_AMOUNT - INSTANCE_LIFETIME_THRESHOLD, DAY_IN_LEDGERS);
+    assert_eq!(PERSISTENT_BUMP_AMOUNT - PERSISTENT_LIFETIME_THRESHOLD, DAY_IN_LEDGERS);
+}
+
+#[test]
+fn token_and_admin_accessors_read_back_initialized_config() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || {
+        assert_eq!(crate::storage::get_token(&env), None);
+        assert_eq!(crate::storage::get_admin(&env), None);
+        assert_eq!(crate::storage::get_treasury(&env), None);
+    });
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    client.initialize(&admin, &treasury, &token);
+
+    env.as_contract(&client.address, || {
+        assert_eq!(crate::storage::get_token(&env), Some(token.clone()));
+        assert_eq!(crate::storage::get_admin(&env), Some(admin.clone()));
+        assert_eq!(crate::storage::get_treasury(&env), Some(treasury.clone()));
+    });
+}
+
+#[test]
+fn set_token_persists_and_bumps_instance_ttl() {
+    let env = Env::default();
+    let client = setup(&env);
+    let token = Address::generate(&env);
+
+    env.as_contract(&client.address, || {
+        crate::storage::set_token(&env, &token);
+        assert_eq!(crate::storage::get_token(&env), Some(token.clone()));
+    });
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn extend_instance_ttl_refreshes_only_below_threshold() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || crate::storage::extend_instance_ttl(&env));
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+
+    // Still above the threshold: a second bump is a no-op.
+    env.ledger().with_mut(|l| l.sequence_number += 10);
+    env.as_contract(&client.address, || crate::storage::extend_instance_ttl(&env));
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT - 10);
+
+    // Decayed below the threshold: bumped back to the full amount.
+    age_past_ttl_thresholds(&env);
+    assert!(instance_ttl(&env, &client) < INSTANCE_LIFETIME_THRESHOLD);
+    env.as_contract(&client.address, || crate::storage::extend_instance_ttl(&env));
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn state_changing_entrypoints_bump_instance_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, _token) = setup_with_token(&env);
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+
+    age_past_ttl_thresholds(&env);
+    assert!(instance_ttl(&env, &client) < INSTANCE_LIFETIME_THRESHOLD);
+    client.set_performance_fee_bps(&admin, &500);
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+
+    age_past_ttl_thresholds(&env);
+    client.set_paused(&admin, &true);
+    assert_eq!(instance_ttl(&env, &client), INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn strategy_record_ttl_bumped_on_write_and_read() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+    let key = DataKey::Strategy(id);
+
+    // Write (register) bumps to the full amount.
+    assert_eq!(persistent_ttl(&env, &client, &key), PERSISTENT_BUMP_AMOUNT);
+
+    // Read (get_strategy) refreshes a decayed entry.
+    age_past_ttl_thresholds(&env);
+    assert!(persistent_ttl(&env, &client, &key) < PERSISTENT_LIFETIME_THRESHOLD);
+    client.get_strategy(&id);
+    assert_eq!(persistent_ttl(&env, &client, &key), PERSISTENT_BUMP_AMOUNT);
+
+    // Write (set_strategy_deposit_cap) refreshes it too.
+    age_past_ttl_thresholds(&env);
+    client.set_strategy_deposit_cap(&admin, &id, &1_000);
+    assert_eq!(persistent_ttl(&env, &client, &key), PERSISTENT_BUMP_AMOUNT);
+}
+
+#[test]
+fn position_and_withdraw_request_ttl_bumped_on_write_and_read() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+    let request_id = client.request_withdraw(&user, &400);
+
+    let position_key = DataKey::Position(user.clone());
+    let request_key = DataKey::WithdrawRequest(request_id);
+    assert_eq!(
+        persistent_ttl(&env, &client, &position_key),
+        PERSISTENT_BUMP_AMOUNT
+    );
+    assert_eq!(
+        persistent_ttl(&env, &client, &request_key),
+        PERSISTENT_BUMP_AMOUNT
+    );
+
+    age_past_ttl_thresholds(&env);
+    assert!(persistent_ttl(&env, &client, &position_key) < PERSISTENT_LIFETIME_THRESHOLD);
+    assert!(persistent_ttl(&env, &client, &request_key) < PERSISTENT_LIFETIME_THRESHOLD);
+
+    client.get_position(&user);
+    client.get_withdraw_request(&request_id);
+    assert_eq!(
+        persistent_ttl(&env, &client, &position_key),
+        PERSISTENT_BUMP_AMOUNT
+    );
+    assert_eq!(
+        persistent_ttl(&env, &client, &request_key),
+        PERSISTENT_BUMP_AMOUNT
+    );
+}
+
+// ---------------------------------------------------------------------------
+// storage — id allocation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn next_id_starts_at_one_and_strictly_increases() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || {
+        // Counter reads `0` when absent, so the first allocation is `1`.
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<_, u64>(&DataKey::NextStrategyId),
+            None
+        );
+        let mut previous = 0u64;
+        for expected in 1..=5u64 {
+            let id = crate::storage::next_id(&env, DataKey::NextStrategyId).unwrap();
+            assert_eq!(id, expected);
+            assert!(id > previous);
+            previous = id;
+        }
+        // The counter persists the last id handed out.
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<_, u64>(&DataKey::NextStrategyId),
+            Some(5)
+        );
+    });
+}
+
+#[test]
+fn next_id_counters_are_independent() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || {
+        let s1 = crate::storage::next_id(&env, DataKey::NextStrategyId).unwrap();
+        let w1 = crate::storage::next_id(&env, DataKey::NextWithdrawId).unwrap();
+        let s2 = crate::storage::next_id(&env, DataKey::NextStrategyId).unwrap();
+        let s3 = crate::storage::next_id(&env, DataKey::NextStrategyId).unwrap();
+        let w2 = crate::storage::next_id(&env, DataKey::NextWithdrawId).unwrap();
+
+        // Each counter starts at 1 and advances only on its own allocations.
+        assert_eq!((s1, s2, s3), (1, 2, 3));
+        assert_eq!((w1, w2), (1, 2));
+    });
+}
+
+#[test]
+fn next_id_rejects_overflow_without_wrapping() {
+    let env = Env::default();
+    let client = setup(&env);
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::NextWithdrawId, &u64::MAX);
+        assert_eq!(
+            crate::storage::next_id(&env, DataKey::NextWithdrawId),
+            Err(Error::Overflow)
+        );
+        // The counter is left where it was — no id is ever reused.
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<_, u64>(&DataKey::NextWithdrawId),
+            Some(u64::MAX)
+        );
+    });
+}
+
+#[test]
+fn strategy_and_withdraw_ids_do_not_collide_through_entrypoints() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+
+    let (_, strategy_1) = register_mock_strategy(&env, &client, &admin, &token);
+    let request_1 = client.request_withdraw(&user, &100);
+    let (_, strategy_2) = register_mock_strategy(&env, &client, &admin, &token);
+    let request_2 = client.request_withdraw(&user, &100);
+
+    assert_eq!((strategy_1, strategy_2), (1, 2));
+    assert_eq!((request_1, request_2), (1, 2));
+}
+
+// ---------------------------------------------------------------------------
 // strategy registry
 // ---------------------------------------------------------------------------
 
@@ -720,6 +978,68 @@ fn get_strategy_unknown_id_is_strategy_not_found() {
         client.try_set_active_strategy(&admin, &1),
         Err(Ok(Error::StrategyNotFound))
     );
+}
+
+#[test]
+fn get_strategy_reads_back_registered_record() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_234);
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (strategy, id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    let info = client.get_strategy(&id);
+    assert_eq!(info.id, id);
+    assert_eq!(info.address, strategy.address);
+    assert_eq!(info.name, String::from_str(&env, "mock"));
+    assert_eq!(info.deposit_cap, 0);
+    assert_eq!(info.registered_at, 1_234);
+    assert_eq!(info.deregistered_at, None);
+
+    // Ids past the last allocated one are still typed errors.
+    assert_eq!(
+        client.try_get_strategy(&(id + 1)),
+        Err(Ok(Error::StrategyNotFound))
+    );
+    assert_eq!(
+        client.try_get_strategy(&0),
+        Err(Ok(Error::StrategyNotFound))
+    );
+}
+
+#[test]
+fn list_strategies_is_empty_before_any_registration() {
+    let env = Env::default();
+    let (client, _admin, _treasury, _token) = setup_with_token(&env);
+    assert_eq!(client.list_strategies().len(), 0);
+}
+
+#[test]
+fn list_strategies_includes_deregistered_in_id_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, first) = register_mock_strategy(&env, &client, &admin, &token);
+    let (_, second) = register_mock_strategy(&env, &client, &admin, &token);
+    let (_, third) = register_mock_strategy(&env, &client, &admin, &token);
+
+    env.ledger().set_timestamp(9_000);
+    client.deregister_strategy(&admin, &second);
+
+    let all = client.list_strategies();
+    assert_eq!(all.len(), 3);
+    assert_eq!(all.get(0).unwrap().id, first);
+    assert_eq!(all.get(1).unwrap().id, second);
+    assert_eq!(all.get(2).unwrap().id, third);
+
+    // Deregistered strategies stay listed; callers filter on `deregistered_at`.
+    assert_eq!(all.get(0).unwrap().deregistered_at, None);
+    assert_eq!(all.get(1).unwrap().deregistered_at, Some(9_000));
+    assert_eq!(all.get(2).unwrap().deregistered_at, None);
+    assert_eq!(client.get_strategy(&second).deregistered_at, Some(9_000));
+
+    let live = all.iter().filter(|s| s.deregistered_at.is_none()).count();
+    assert_eq!(live, 2);
 }
 
 #[test]
@@ -1005,13 +1325,7 @@ fn deposit_rejects_when_active_strategy_cap_exceeded() {
     let (client, admin, _treasury, token) = setup_with_token(&env);
     let (_, id) = activate_mock_strategy(&env, &client, &admin, &token);
 
-    // `set_strategy_deposit_cap` is a separate issue; set the cap directly.
-    env.as_contract(&client.address, || {
-        let key = DataKey::Strategy(id);
-        let mut info: StrategyInfo = env.storage().persistent().get(&key).unwrap();
-        info.deposit_cap = 1_000;
-        env.storage().persistent().set(&key, &info);
-    });
+    client.set_strategy_deposit_cap(&admin, &id, &1_000);
 
     let user = funded_user(&env, &token, 1_500);
     client.deposit(&user, &1_000); // exactly at the cap is allowed
@@ -1020,6 +1334,122 @@ fn deposit_rejects_when_active_strategy_cap_exceeded() {
         Err(Ok(Error::StrategyCapExceeded))
     );
     assert_eq!(client.get_position(&user).shares, 1_000);
+}
+
+#[test]
+fn set_strategy_deposit_cap_persists_on_strategy_record() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+    let (_, other_id) = register_mock_strategy(&env, &client, &admin, &token);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 0);
+
+    client.set_strategy_deposit_cap(&admin, &id, &5_000);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 5_000);
+    // Caps are per strategy: the other record is untouched.
+    assert_eq!(client.get_strategy(&other_id).deposit_cap, 0);
+
+    // Overwriting, then resetting to `0` (unlimited), both stick.
+    client.set_strategy_deposit_cap(&admin, &id, &7_500);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 7_500);
+    client.set_strategy_deposit_cap(&admin, &id, &0);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 0);
+
+    // Only the cap changes — the rest of the record is preserved.
+    let info = client.get_strategy(&id);
+    assert_eq!(info.id, id);
+    assert_eq!(info.name, String::from_str(&env, "mock"));
+    assert_eq!(info.deregistered_at, None);
+}
+
+#[test]
+fn set_strategy_deposit_cap_zero_means_unlimited() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = activate_mock_strategy(&env, &client, &admin, &token);
+
+    client.set_strategy_deposit_cap(&admin, &id, &100);
+    let user = funded_user(&env, &token, 10_000);
+    assert_eq!(
+        client.try_deposit(&user, &101),
+        Err(Ok(Error::StrategyCapExceeded))
+    );
+
+    client.set_strategy_deposit_cap(&admin, &id, &0);
+    client.deposit(&user, &10_000);
+    assert_eq!(client.get_position(&user).shares, 10_000);
+}
+
+#[test]
+fn set_strategy_deposit_cap_on_inactive_strategy_has_no_live_effect() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, _active_id) = activate_mock_strategy(&env, &client, &admin, &token);
+    let (_, standby_id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    client.set_strategy_deposit_cap(&admin, &standby_id, &1);
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+    assert_eq!(client.get_position(&user).shares, 1_000);
+}
+
+#[test]
+fn set_strategy_deposit_cap_guards() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+    let outsider = Address::generate(&env);
+
+    assert_eq!(
+        client.try_set_strategy_deposit_cap(&outsider, &id, &1_000),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        client.try_set_strategy_deposit_cap(&admin, &id, &-1),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        client.try_set_strategy_deposit_cap(&admin, &99, &1_000),
+        Err(Ok(Error::StrategyNotFound))
+    );
+
+    client.set_paused(&admin, &true);
+    assert_eq!(
+        client.try_set_strategy_deposit_cap(&admin, &id, &1_000),
+        Err(Ok(Error::Paused))
+    );
+
+    assert_eq!(client.get_strategy(&id).deposit_cap, 0);
+}
+
+#[test]
+fn set_strategy_deposit_cap_requires_admin_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    env.mock_auths(&[]);
+    assert!(matches!(
+        client.try_set_strategy_deposit_cap(&admin, &id, &1_000),
+        Err(Err(_))
+    ));
+
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_strategy_deposit_cap",
+            args: (admin.clone(), id, 1_000i128).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.set_strategy_deposit_cap(&admin, &id, &1_000);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 1_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -1663,7 +2093,7 @@ fn loss_reduces_exchange_rate_without_charging_fee() {
 //
 // Covers every mutating entrypoint implemented today. Still stubbed with
 // `unimplemented!()`, so not exercisable yet: `set_admin`, `set_treasury`,
-// `set_withdraw_cooldown`, `upgrade`, `set_strategy_deposit_cap`,
+// `set_withdraw_cooldown`, `upgrade`,
 // `request_withdraw`, `claim_withdraw` — add a case to both tests below as
 // each one lands.
 
@@ -1755,6 +2185,7 @@ fn assert_auth_harness_untouched(
     assert!(!client.is_paused());
     assert_eq!(client.list_strategies().len(), 2);
     assert!(client.get_strategy(&standby_id).deregistered_at.is_none());
+    assert_eq!(client.get_strategy(&standby_id).deposit_cap, 0);
     assert_eq!(active_strategy_id(env, client), Some(active_id));
     assert!(!withdraw_request_cancelled(env, client, 1));
     assert_eq!(client.total_shares(), 600);
@@ -2574,6 +3005,7 @@ fn mutating_entrypoints_reject_missing_signature() {
     assert_auth_rejected!(client.try_deregister_strategy(&admin, &standby_id));
     assert_auth_rejected!(client.try_set_active_strategy(&admin, &standby_id));
     assert_auth_rejected!(client.try_migrate_strategy(&admin, &standby_id));
+    assert_auth_rejected!(client.try_set_strategy_deposit_cap(&admin, &standby_id, &1_000));
     assert_auth_rejected!(client.try_emergency_withdraw_all(&admin));
     assert_auth_rejected!(client.try_deposit(&owner, &100));
     assert_auth_rejected!(client.try_cancel_withdraw(&owner, &1));

@@ -326,15 +326,32 @@ pub fn migrate_strategy(env: &Env, caller: Address, new_strategy_id: u64) -> Res
 /// - Requires `require_auth` from the current admin.
 /// - Enforced in `deposit` against the *active* strategy's cap only; a
 ///   non-active strategy's cap has no live effect.
+/// - Errors `Error::InvalidAmount` if `cap < 0`.
+/// - Errors `Error::StrategyNotFound` if `strategy_id` is unknown.
+/// - Errors `Error::Paused` while paused (strategy mutations are on the
+///   pause blocklist — see `admin::set_paused`).
 ///
-/// TODO(issue): implement.
+/// Lowering the cap below what is already deployed does not move funds; it
+/// only rejects further deposits until the deployed balance drops under it.
 pub fn set_strategy_deposit_cap(
-    _env: &Env,
-    _caller: Address,
-    _strategy_id: u64,
-    _cap: i128,
+    env: &Env,
+    caller: Address,
+    strategy_id: u64,
+    cap: i128,
 ) -> Result<(), Error> {
-    unimplemented!("strategy: set_strategy_deposit_cap")
+    extend_instance_ttl(env);
+    admin::require_admin(env, &caller)?;
+    admin::require_not_paused(env)?;
+
+    if cap < 0 {
+        return Err(Error::InvalidAmount);
+    }
+
+    let mut info = get_strategy(env, strategy_id)?;
+    info.deposit_cap = cap;
+    save_strategy(env, &info);
+
+    Ok(())
 }
 
 /// Read a strategy by id, or `Error::StrategyNotFound`.
