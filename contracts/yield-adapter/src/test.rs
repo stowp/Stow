@@ -1980,6 +1980,71 @@ fn set_admin_before_initialize_rejected() {
     assert_eq!(result, Err(Ok(Error::NotInitialized)));
 }
 
+// ---------------------------------------------------------------------------
+// storage::transfer_in / transfer_out
+// ---------------------------------------------------------------------------
+
+#[test]
+fn transfer_helpers_move_vault_token_in_and_out() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, _admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+
+    env.as_contract(&client.address, || {
+        crate::storage::transfer_in(&env, &user, 700).unwrap();
+    });
+    assert_eq!(balance_of(&env, &token, &user), 300);
+    assert_eq!(balance_of(&env, &token, &client.address), 700);
+
+    env.as_contract(&client.address, || {
+        crate::storage::transfer_out(&env, &user, 250).unwrap();
+    });
+    assert_eq!(balance_of(&env, &token, &user), 550);
+    assert_eq!(balance_of(&env, &token, &client.address), 450);
+}
+
+#[test]
+fn transfer_helpers_reject_non_positive_amount() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, _admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+
+    env.as_contract(&client.address, || {
+        for amount in [0i128, -1] {
+            assert_eq!(
+                crate::storage::transfer_in(&env, &user, amount),
+                Err(Error::InvalidAmount)
+            );
+            assert_eq!(
+                crate::storage::transfer_out(&env, &user, amount),
+                Err(Error::InvalidAmount)
+            );
+        }
+    });
+    assert_eq!(balance_of(&env, &token, &user), 1_000);
+}
+
+#[test]
+fn transfer_helpers_require_configured_token() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let client = setup(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            crate::storage::transfer_in(&env, &user, 1),
+            Err(Error::NotInitialized)
+        );
+        assert_eq!(
+            crate::storage::transfer_out(&env, &user, 1),
+            Err(Error::NotInitialized)
+        );
+    });
+}
+
 #[test]
 fn get_withdraw_request_returns_seeded_request() {
     use crate::types::{DataKey, WithdrawRequest};
