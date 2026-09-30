@@ -2135,13 +2135,67 @@ fn set_active_strategy_emits_strategy_changed_with_from_none() {
     let events = env.events().all();
     let (contract_id, topics, data) = events.last().unwrap().clone();
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
-        (crate::events::TOPIC_STRATEGY_CHANGED,).into_val(&env);
-    let decoded: (Option<u64>, u64, u64) =
+        (Symbol::new(&env, crate::events::TOPIC_STRATEGY_CHANGED),).into_val(&env);
+    let decoded: (Option<u64>, Option<u64>, i128, u64) =
         soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
 
     assert_eq!(contract_id, client.address);
     assert_eq!(topics, expected_topics);
-    assert_eq!(decoded, (None, id, now));
+    assert_eq!(decoded, (None, Some(id), 0, now));
+    assert_eq!(active_strategy_id(&env, &client), Some(id));
+}
+
+#[test]
+fn set_active_strategy_leaves_idle_funds_idle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+
+    let (strategy, _) = activate_mock_strategy(&env, &client, &admin, &token);
+
+    // First activation moves nothing — there is nothing to move from.
+    assert_eq!(balance_of(&env, &token, &client.address), 1_000);
+    assert_eq!(strategy.balance(&client.address), 0);
+    assert_eq!(client.total_assets(), 1_000);
+}
+
+#[test]
+fn set_active_strategy_rejects_non_admin_and_leaves_no_active_strategy() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    assert_eq!(
+        client.try_set_active_strategy(&Address::generate(&env), &id),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(active_strategy_id(&env, &client), None);
+}
+
+/// Once active, the only way to change strategies is `migrate_strategy`
+/// (or `emergency_withdraw_all`, which clears the slot) — never a second
+/// `set_active_strategy`, even for a different, valid strategy.
+#[test]
+fn set_active_strategy_can_only_activate_once_until_cleared() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id1) = activate_mock_strategy(&env, &client, &admin, &token);
+    let (_, id2) = register_mock_strategy(&env, &client, &admin, &token);
+
+    assert_eq!(
+        client.try_set_active_strategy(&admin, &id2),
+        Err(Ok(Error::StrategyAlreadyActive))
+    );
+    assert_eq!(active_strategy_id(&env, &client), Some(id1));
+
+    // After the circuit breaker clears the slot, activation is allowed again.
+    client.emergency_withdraw_all(&admin);
+    client.set_active_strategy(&admin, &id2);
+    assert_eq!(active_strategy_id(&env, &client), Some(id2));
 }
 
 #[test]
