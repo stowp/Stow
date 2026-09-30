@@ -4,6 +4,7 @@ use soroban_sdk::{Address, BytesN, Env};
 
 use crate::error::Error;
 use crate::events;
+use crate::fees;
 use crate::storage::{self, extend_instance_ttl};
 use crate::types::DataKey;
 
@@ -134,23 +135,22 @@ pub fn performance_fee_bps(env: &Env) -> u32 {
 
 /// Set the performance fee. Admin-only.
 ///
-/// - Requires `require_auth` from the current admin.
-/// - Errors `Error::FeeTooHigh` if `bps > 3_000` (30%) — see
-///   `fees` module doc for why this cap exists.
+/// - Requires `require_auth` from `caller`; errors `Error::Unauthorized`
+///   unless `caller` is the admin.
+/// - Errors `Error::FeeTooHigh` if `bps > fees::MAX_PERFORMANCE_FEE_BPS`
+///   (3_000, i.e. 30%) — see `fees` module doc for why this cap exists. A
+///   rejected value leaves the previously configured fee untouched.
 /// - Takes effect on the *next* `harvest` call; does not retroactively
 ///   apply to yield already reported.
 pub fn set_performance_fee_bps(env: &Env, caller: Address, bps: u32) -> Result<(), Error> {
-    caller.require_auth();
-    let current_admin = admin(env)?;
-    if caller != current_admin {
-        return Err(Error::Unauthorized);
-    }
-    crate::fees::validate_fee_bps(bps)?;
-
     extend_instance_ttl(env);
+    require_admin(env, &caller)?;
+    fees::validate_fee_bps(bps)?;
+
     env.storage()
         .instance()
         .set(&DataKey::PerformanceFeeBps, &bps);
+
     Ok(())
 }
 
