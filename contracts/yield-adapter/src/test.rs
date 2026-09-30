@@ -519,6 +519,63 @@ fn register_strategy_stores_record_and_emits_event() {
 }
 
 #[test]
+fn register_strategy_rejected_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    client.set_paused(&admin, &true);
+
+    let strategy_addr = env.register(MockStrategy, (token.clone(),));
+    assert_eq!(
+        client.try_register_strategy(&admin, &strategy_addr, &String::from_str(&env, "x")),
+        Err(Ok(Error::Paused))
+    );
+    assert_eq!(client.list_strategies().len(), 0);
+}
+
+#[test]
+fn register_strategy_before_initialize_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = setup(&env);
+    let caller = Address::generate(&env);
+
+    assert_eq!(
+        client.try_register_strategy(
+            &caller,
+            &Address::generate(&env),
+            &String::from_str(&env, "x")
+        ),
+        Err(Ok(Error::NotInitialized))
+    );
+}
+
+#[test]
+fn register_strategy_allows_reregistering_deregistered_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (strategy, id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    // Only live registrations count as duplicates; mark the first one
+    // deregistered directly so this test doesn't depend on
+    // `deregister_strategy`.
+    env.as_contract(&client.address, || {
+        let key = DataKey::Strategy(id);
+        let mut info: StrategyInfo = env.storage().persistent().get(&key).unwrap();
+        info.deregistered_at = Some(1);
+        env.storage().persistent().set(&key, &info);
+    });
+
+    let new_id =
+        client.register_strategy(&admin, &strategy.address, &String::from_str(&env, "again"));
+    assert_eq!(new_id, id + 1);
+    assert_eq!(client.get_strategy(&new_id).address, strategy.address);
+    assert_eq!(client.get_strategy(&id).deregistered_at, Some(1));
+    assert_eq!(client.list_strategies().len(), 2);
+}
+
+#[test]
 fn get_strategy_unknown_id_is_strategy_not_found() {
     let env = Env::default();
     env.mock_all_auths();
