@@ -150,9 +150,9 @@ see [`src/error.rs`](src/error.rs) for the full, stable error enum.
 | | `deregister_strategy(caller, strategy_id)` | admin | `Unauthorized`, `StrategyNotFound`, `StrategyActive` | Deregister an inactive strategy. |
 | | `set_active_strategy(caller, strategy_id)` | admin | `Unauthorized`, `Paused`, `StrategyNotFound`, `StrategyAlreadyActive` | Activate an existing strategy. |
 | | `migrate_strategy(caller, new_strategy_id)` | admin | `Unauthorized`, `Paused`, `StrategyNotFound`, `StrategyAlreadyActive` | Move deployed funds from current to new strategy. |
-| | `set_strategy_deposit_cap(caller, strategy_id, cap)` | admin | `Unauthorized`, `StrategyNotFound`, `InvalidAmount` | Set per-strategy deposit cap (0 = unlimited). |
-| | `get_strategy(strategy_id)` | none (read) | `NotFound` | Look up strategy info by id. |
-| | `list_strategies()` | none (read) | none | List all registered strategies. |
+| | `set_strategy_deposit_cap(caller, strategy_id, cap)` | admin | `Unauthorized`, `Paused`, `StrategyNotFound`, `InvalidAmount` | Set per-strategy deposit cap (0 = unlimited). |
+| | `get_strategy(strategy_id)` | none (read) | `StrategyNotFound` | Look up strategy info by id. |
+| | `list_strategies()` | none (read) | none | List all registered strategies (including deregistered ones — filter on `deregistered_at`). |
 | **Deposit** | `deposit(from, amount)` | `from` | `Paused`, `InvalidAmount`, `StrategyCapExceeded`, `Overflow` | Deposit vault token and mint proportional shares. |
 | | `get_position(owner)` | none (read) | `NotFound` | Query owner's shares and position metadata. |
 | **Withdraw** | `request_withdraw(owner, shares)` | `owner` | `Paused`, `InvalidAmount`, `InsufficientBalance`, `Overflow` | Burn shares and enqueue cooldown-queued withdrawal. |
@@ -349,7 +349,8 @@ stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
 
 #### `set_strategy_deposit_cap(caller: Address, strategy_id: u64, cap: i128) -> Result<(), Error>`
 - **Auth:** current admin (`caller`).
-- **Errors:** `Unauthorized`, `StrategyNotFound`, `InvalidAmount` (if `cap < 0`).
+- **Errors:** `Unauthorized`, `Paused`, `StrategyNotFound`, `InvalidAmount` (if `cap < 0`).
+- **Effect:** updates `get_strategy(strategy_id).deposit_cap`; `0` means unlimited. Only the active strategy's cap is enforced by `deposit`.
 ```bash
 stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
   -- set_strategy_deposit_cap --caller $ADMIN_ADDRESS --strategy_id 1 --cap 5000000000000
@@ -357,7 +358,7 @@ stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
 
 #### `get_strategy(env: Env, strategy_id: u64) -> Result<StrategyInfo, Error>`
 - **Auth:** none (read-only).
-- **Errors:** `NotFound` if strategy_id does not exist.
+- **Errors:** `StrategyNotFound` if strategy_id does not exist.
 ```bash
 stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
   -- get_strategy --strategy_id 1
