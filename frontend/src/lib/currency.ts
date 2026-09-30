@@ -214,3 +214,242 @@ export function formatAPR(
   const amount = formatNumber(value, { locale, maximumFractionDigits });
   return `${amount}%`;
 }
+
+// ---------------------------------------------------------------------------
+// USDC (7-decimal stroops)
+// ---------------------------------------------------------------------------
+//
+// USDC on Stellar/Soroban is carried on-chain as an i128 of 7-decimal base
+// units ("stroops"). The helpers below never route an amount through a JS
+// `number`: formatting splits the `bigint` into whole/fractional parts and
+// parsing builds the `bigint` from the typed digits, so any value
+// round-trips exactly, however large.
+
+/** Decimal places of USDC on Stellar (1 USDC = 10,000,000 stroops). */
+export const USDC_DECIMALS = 7;
+
+/** Stroops per whole USDC, as a `bigint`. */
+// `BigInt(...)` rather than `n` literals: tsconfig targets ES2017.
+const ZERO = BigInt(0);
+const ONE = BigInt(1);
+
+export const STROOPS_PER_USDC = BigInt(10) ** BigInt(USDC_DECIMALS);
+
+interface LocaleSeparators {
+  group: string;
+  decimal: string;
+}
+
+/** The locale's actual group and decimal separators (e.g. "." and "," in de-DE). */
+export function getLocaleSeparators(locale?: string): LocaleSeparators {
+  let parts: Intl.NumberFormatPart[];
+  try {
+    parts = new Intl.NumberFormat(resolveLocale(locale)).formatToParts(
+      1234567.5,
+    );
+  } catch {
+    parts = new Intl.NumberFormat().formatToParts(1234567.5);
+  }
+  return {
+    group: parts.find((p) => p.type === "group")?.value ?? ",",
+    decimal: parts.find((p) => p.type === "decimal")?.value ?? ".",
+  };
+}
+
+function toBigInt(stroops: string | bigint): bigint | null {
+  if (typeof stroops === "bigint") return stroops;
+  const trimmed = stroops.trim();
+  if (!/^-?\d+$/.test(trimmed)) return null;
+  return BigInt(trimmed);
+}
+
+export interface FormatUsdcOptions {
+  /** BCP 47 locale tag. Defaults to the runtime locale. */
+  locale?: string;
+  /** Digits kept after the decimal mark (0–7). Extra digits are truncated, never rounded up. Defaults to 7. */
+  maximumFractionDigits?: number;
+  /** Digits always shown after the decimal mark, zero-padded (0–7). Defaults to 2. */
+  minimumFractionDigits?: number;
+  /** Insert the locale's group separator. Defaults to `true`. */
+  useGrouping?: boolean;
+  /** Append " USDC". Defaults to `false`. */
+  withSymbol?: boolean;
+}
+
+function clampDigits(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.min(USDC_DECIMALS, Math.max(0, Math.trunc(value)));
+}
+
+/**
+ * Formats a USDC stroop amount for display without precision loss, e.g.
+ * `formatUsdc("12345678900000", { locale: "en-US" })` -> "1,234,567.89".
+ *
+ * Excess fraction digits beyond `maximumFractionDigits` are truncated
+ * (toward zero) rather than rounded, so a displayed balance is never more
+ * than what's actually held. Invalid input renders as zero.
+ */
+export function formatUsdc(
+  stroops: string | bigint,
+  options?: FormatUsdcOptions,
+): string {
+  const {
+    locale,
+    useGrouping = true,
+    withSymbol = false,
+  } = options ?? {};
+  const maxDigits = clampDigits(options?.maximumFractionDigits, USDC_DECIMALS);
+  const minDigits = Math.min(
+    clampDigits(options?.minimumFractionDigits, 2),
+    maxDigits,
+  );
+
+  const value = toBigInt(stroops) ?? ZERO;
+  const negative = value < ZERO;
+  const abs = negative ? -value : value;
+  const whole = abs / STROOPS_PER_USDC;
+  const fraction = abs % STROOPS_PER_USDC;
+
+  let fractionDigits = fraction
+    .toString()
+    .padStart(USDC_DECIMALS, "0")
+    .slice(0, maxDigits)
+    .replace(/0+$/, "");
+  if (fractionDigits.length < minDigits) {
+    fractionDigits = fractionDigits.padEnd(minDigits, "0");
+  }
+
+  const wholeText = formatGroupedInteger(whole, locale, useGrouping);
+  const { decimal } = getLocaleSeparators(locale);
+  const isZero = whole === ZERO && /^0*$/.test(fractionDigits);
+  const sign = negative && !isZero ? "-" : "";
+  const amount = fractionDigits
+    ? `${sign}${wholeText}${decimal}${fractionDigits}`
+    : `${sign}${wholeText}`;
+
+  return withSymbol ? `${amount} USDC` : amount;
+}
+
+export type UsdcParseError = "empty" | "invalid" | "too_many_decimals";
+
+export type UsdcParseResult =
+  | { ok: true; stroops: bigint }
+  | { ok: false; error: UsdcParseError };
+
+function formatGroupedInteger(
+  value: bigint,
+  locale?: string,
+  useGrouping = true,
+): string {
+  const options = { useGrouping, maximumFractionDigits: 0 };
+  try {
+    return new Intl.NumberFormat(resolveLocale(locale), options).format(value);
+  } catch {
+    return new Intl.NumberFormat(undefined, options).format(value);
+  }
+}
+
+/**
+ * Parses a user-typed USDC amount (in `locale`'s notation) into stroops.
+ *
+ * - Accepts the locale's decimal mark and, optionally, its group separator
+ *   — but only in well-formed groups of three (so "1.5" typed in de-DE is
+ *   rejected rather than silently read as 15).
+ * - Whitespace (including the narrow no-break space fr-FR groups with) is
+ *   ignored; a trailing/leading "USDC" label is ignored.
+ * - Rejects negatives and more than 7 fraction digits.
+ */
+export function parseUsdc(input: string, locale?: string): UsdcParseResult {
+  const { group, decimal } = getLocaleSeparators(locale);
+  const cleaned = input
+    .replace(/usdc/gi, "")
+    .replace(/\s/g, "")
+    .trim();
+  if (cleaned === "") return { ok: false, error: "empty" };
+
+  const decimalIndex = cleaned.indexOf(decimal);
+  const wholePart =
+    decimalIndex === -1 ? cleaned : cleaned.slice(0, decimalIndex);
+  const fractionPart =
+    decimalIndex === -1 ? "" : cleaned.slice(decimalIndex + decimal.length);
+
+  // Whitespace group separators were already stripped above.
+  const groupIsSpace = /^\s$/.test(group);
+  let wholeDigits = wholePart;
+  if (!groupIsSpace && wholePart.includes(group)) {
+    wholeDigits = wholePart.split(group).join("");
+    // Grouping must match how this locale itself groups the digits
+    // (thousands in en-US, lakh/crore in en-IN, ...).
+    if (!/^\d+$/.test(wholeDigits)) return { ok: false, error: "invalid" };
+    const canonical = formatGroupedInteger(BigInt(wholeDigits), locale);
+    if (canonical !== wholePart) return { ok: false, error: "invalid" };
+  }
+
+  if (!/^\d*$/.test(wholeDigits) || !/^\d*$/.test(fractionPart)) {
+    return { ok: false, error: "invalid" };
+  }
+  if (wholeDigits === "" && fractionPart === "") {
+    return { ok: false, error: "invalid" };
+  }
+  if (fractionPart.length > USDC_DECIMALS) {
+    return { ok: false, error: "too_many_decimals" };
+  }
+
+  const stroops =
+    BigInt(wholeDigits || "0") * STROOPS_PER_USDC +
+    BigInt(fractionPart.padEnd(USDC_DECIMALS, "0") || "0");
+  return { ok: true, stroops };
+}
+
+export interface ValidateUsdcOptions {
+  locale?: string;
+  /** Smallest accepted amount, in stroops. Defaults to 1 (i.e. > 0). */
+  min?: bigint;
+  /** Largest accepted amount, in stroops (e.g. the user's balance). */
+  max?: bigint;
+}
+
+export type UsdcValidationResult =
+  | { ok: true; stroops: bigint }
+  | { ok: false; error: string };
+
+/**
+ * Parses and range-checks a typed USDC amount, returning either the stroop
+ * value or a user-facing error message.
+ */
+export function validateUsdcAmount(
+  input: string,
+  options?: ValidateUsdcOptions,
+): UsdcValidationResult {
+  const { locale, min = ONE, max } = options ?? {};
+  const parsed = parseUsdc(input, locale);
+  if (!parsed.ok) {
+    switch (parsed.error) {
+      case "empty":
+        return { ok: false, error: "Enter an amount." };
+      case "too_many_decimals":
+        return {
+          ok: false,
+          error: `USDC supports at most ${USDC_DECIMALS} decimal places.`,
+        };
+      default:
+        return { ok: false, error: "Enter a valid amount." };
+    }
+  }
+
+  if (parsed.stroops < min) {
+    return min <= ONE
+      ? { ok: false, error: "Amount must be greater than 0." }
+      : {
+          ok: false,
+          error: `Minimum amount is ${formatUsdc(min, { locale, minimumFractionDigits: 0 })} USDC.`,
+        };
+  }
+  if (max !== undefined && parsed.stroops > max) {
+    return {
+      ok: false,
+      error: `Maximum amount is ${formatUsdc(max, { locale, minimumFractionDigits: 0 })} USDC.`,
+    };
+  }
+  return parsed;
+}

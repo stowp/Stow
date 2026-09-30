@@ -7,6 +7,11 @@ import {
   formatStroopsAmount,
   parseLocaleNumber,
   STROOPS_PER_XLM,
+  STROOPS_PER_USDC,
+  USDC_DECIMALS,
+  formatUsdc,
+  parseUsdc,
+  validateUsdcAmount,
 } from "./currency";
 
 describe("currency", () => {
@@ -193,6 +198,154 @@ describe("currency", () => {
           2,
         );
       }
+    });
+  });
+
+  describe("formatUsdc", () => {
+    it("uses 7 decimals (10,000,000 stroops per USDC)", () => {
+      expect(USDC_DECIMALS).toBe(7);
+      expect(STROOPS_PER_USDC).toBe(BigInt(10_000_000));
+    });
+
+    it("formats stroops with locale grouping and a 2-digit minimum", () => {
+      expect(formatUsdc("12345678900000", { locale: "en-US" })).toBe(
+        "1,234,567.89",
+      );
+      expect(formatUsdc("10000000", { locale: "en-US" })).toBe("1.00");
+      expect(formatUsdc("12345678900000", { locale: "de-DE" })).toBe(
+        "1.234.567,89",
+      );
+    });
+
+    it("keeps all 7 decimals by default", () => {
+      expect(formatUsdc("1", { locale: "en-US" })).toBe("0.0000001");
+      expect(formatUsdc(BigInt(12345678), { locale: "en-US" })).toBe("1.2345678");
+    });
+
+    it("truncates (never rounds up) past maximumFractionDigits", () => {
+      expect(
+        formatUsdc("19999999", { locale: "en-US", maximumFractionDigits: 2 }),
+      ).toBe("1.99");
+    });
+
+    it("formats values far beyond Number.MAX_SAFE_INTEGER exactly", () => {
+      expect(
+        formatUsdc("123456789012345678901234567", {
+          locale: "en-US",
+          useGrouping: false,
+        }),
+      ).toBe("12345678901234567890.1234567");
+    });
+
+    it("handles negatives, the symbol suffix, and invalid input", () => {
+      expect(formatUsdc(-BigInt(15000000), { locale: "en-US" })).toBe("-1.50");
+      expect(formatUsdc("5000000", { locale: "en-US", withSymbol: true })).toBe(
+        "0.50 USDC",
+      );
+      expect(formatUsdc("not-a-number", { locale: "en-US" })).toBe("0.00");
+    });
+  });
+
+  describe("parseUsdc", () => {
+    it("parses locale-formatted input into stroops", () => {
+      expect(parseUsdc("1,234.5", "en-US")).toEqual({
+        ok: true,
+        stroops: BigInt(12345000000),
+      });
+      expect(parseUsdc("1.234,5", "de-DE")).toEqual({
+        ok: true,
+        stroops: BigInt(12345000000),
+      });
+      expect(parseUsdc("1\u202f234,5", "fr-FR")).toEqual({
+        ok: true,
+        stroops: BigInt(12345000000),
+      });
+      expect(parseUsdc(".5", "en-US")).toEqual({ ok: true, stroops: BigInt(5000000) });
+      expect(parseUsdc("10 USDC", "en-US")).toEqual({
+        ok: true,
+        stroops: BigInt(100000000),
+      });
+    });
+
+    it("rejects more than 7 decimals", () => {
+      expect(parseUsdc("0.00000001", "en-US")).toEqual({
+        ok: false,
+        error: "too_many_decimals",
+      });
+    });
+
+    it("rejects malformed grouping instead of guessing", () => {
+      // In de-DE "." groups thousands, so "1.5" is not a valid number.
+      expect(parseUsdc("1.5", "de-DE")).toEqual({ ok: false, error: "invalid" });
+      expect(parseUsdc("12,34", "en-US")).toEqual({
+        ok: false,
+        error: "invalid",
+      });
+    });
+
+    it("rejects empty, negative, and non-numeric input", () => {
+      expect(parseUsdc("  ", "en-US")).toEqual({ ok: false, error: "empty" });
+      expect(parseUsdc("-1", "en-US")).toEqual({ ok: false, error: "invalid" });
+      expect(parseUsdc("abc", "en-US")).toEqual({ ok: false, error: "invalid" });
+      expect(parseUsdc("1.2.3", "en-US")).toEqual({
+        ok: false,
+        error: "invalid",
+      });
+      expect(parseUsdc(".", "en-US")).toEqual({ ok: false, error: "invalid" });
+    });
+
+    it("round-trips stroops -> display -> stroops without precision loss", () => {
+      const samples = [
+        BigInt(0),
+        BigInt(1),
+        BigInt(9_999_999),
+        BigInt(10_000_000),
+        BigInt(12_345_678),
+        BigInt(100_000_000_000_001),
+        BigInt("1267650600228229401496703205383"),
+      ];
+      for (const locale of ["en-US", "de-DE", "fr-FR", "en-IN"]) {
+        for (const stroops of samples) {
+          const display = formatUsdc(stroops, { locale });
+          expect(parseUsdc(display, locale)).toEqual({ ok: true, stroops });
+        }
+      }
+    });
+  });
+
+  describe("validateUsdcAmount", () => {
+    it("returns stroops for a valid amount", () => {
+      expect(validateUsdcAmount("2.5", { locale: "en-US" })).toEqual({
+        ok: true,
+        stroops: BigInt(25000000),
+      });
+    });
+
+    it("rejects zero by default", () => {
+      expect(validateUsdcAmount("0", { locale: "en-US" })).toEqual({
+        ok: false,
+        error: "Amount must be greater than 0.",
+      });
+    });
+
+    it("enforces min and max bounds", () => {
+      expect(
+        validateUsdcAmount("0.5", { locale: "en-US", min: BigInt(10_000_000) }),
+      ).toEqual({ ok: false, error: "Minimum amount is 1 USDC." });
+      expect(
+        validateUsdcAmount("101", { locale: "en-US", max: BigInt(1_000_000_000) }),
+      ).toEqual({ ok: false, error: "Maximum amount is 100 USDC." });
+    });
+
+    it("maps parse errors to user-facing messages", () => {
+      expect(validateUsdcAmount("", { locale: "en-US" })).toEqual({
+        ok: false,
+        error: "Enter an amount.",
+      });
+      expect(validateUsdcAmount("1.123456789", { locale: "en-US" })).toEqual({
+        ok: false,
+        error: "USDC supports at most 7 decimal places.",
+      });
     });
   });
 });

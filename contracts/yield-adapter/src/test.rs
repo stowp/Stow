@@ -519,6 +519,63 @@ fn register_strategy_stores_record_and_emits_event() {
 }
 
 #[test]
+fn register_strategy_rejected_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    client.set_paused(&admin, &true);
+
+    let strategy_addr = env.register(MockStrategy, (token.clone(),));
+    assert_eq!(
+        client.try_register_strategy(&admin, &strategy_addr, &String::from_str(&env, "x")),
+        Err(Ok(Error::Paused))
+    );
+    assert_eq!(client.list_strategies().len(), 0);
+}
+
+#[test]
+fn register_strategy_before_initialize_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = setup(&env);
+    let caller = Address::generate(&env);
+
+    assert_eq!(
+        client.try_register_strategy(
+            &caller,
+            &Address::generate(&env),
+            &String::from_str(&env, "x")
+        ),
+        Err(Ok(Error::NotInitialized))
+    );
+}
+
+#[test]
+fn register_strategy_allows_reregistering_deregistered_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (strategy, id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    // Only live registrations count as duplicates; mark the first one
+    // deregistered directly so this test doesn't depend on
+    // `deregister_strategy`.
+    env.as_contract(&client.address, || {
+        let key = DataKey::Strategy(id);
+        let mut info: StrategyInfo = env.storage().persistent().get(&key).unwrap();
+        info.deregistered_at = Some(1);
+        env.storage().persistent().set(&key, &info);
+    });
+
+    let new_id =
+        client.register_strategy(&admin, &strategy.address, &String::from_str(&env, "again"));
+    assert_eq!(new_id, id + 1);
+    assert_eq!(client.get_strategy(&new_id).address, strategy.address);
+    assert_eq!(client.get_strategy(&id).deregistered_at, Some(1));
+    assert_eq!(client.list_strategies().len(), 2);
+}
+
+#[test]
 fn get_strategy_unknown_id_is_strategy_not_found() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1921,6 +1978,71 @@ fn set_admin_before_initialize_rejected() {
 
     let result = client.try_set_admin(&new_admin);
     assert_eq!(result, Err(Ok(Error::NotInitialized)));
+}
+
+// ---------------------------------------------------------------------------
+// storage::transfer_in / transfer_out
+// ---------------------------------------------------------------------------
+
+#[test]
+fn transfer_helpers_move_vault_token_in_and_out() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, _admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+
+    env.as_contract(&client.address, || {
+        crate::storage::transfer_in(&env, &user, 700).unwrap();
+    });
+    assert_eq!(balance_of(&env, &token, &user), 300);
+    assert_eq!(balance_of(&env, &token, &client.address), 700);
+
+    env.as_contract(&client.address, || {
+        crate::storage::transfer_out(&env, &user, 250).unwrap();
+    });
+    assert_eq!(balance_of(&env, &token, &user), 550);
+    assert_eq!(balance_of(&env, &token, &client.address), 450);
+}
+
+#[test]
+fn transfer_helpers_reject_non_positive_amount() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (client, _admin, _treasury, token) = setup_with_token(&env);
+    let user = funded_user(&env, &token, 1_000);
+
+    env.as_contract(&client.address, || {
+        for amount in [0i128, -1] {
+            assert_eq!(
+                crate::storage::transfer_in(&env, &user, amount),
+                Err(Error::InvalidAmount)
+            );
+            assert_eq!(
+                crate::storage::transfer_out(&env, &user, amount),
+                Err(Error::InvalidAmount)
+            );
+        }
+    });
+    assert_eq!(balance_of(&env, &token, &user), 1_000);
+}
+
+#[test]
+fn transfer_helpers_require_configured_token() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let client = setup(&env);
+    let user = Address::generate(&env);
+
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            crate::storage::transfer_in(&env, &user, 1),
+            Err(Error::NotInitialized)
+        );
+        assert_eq!(
+            crate::storage::transfer_out(&env, &user, 1),
+            Err(Error::NotInitialized)
+        );
+    });
 }
 
 #[test]
