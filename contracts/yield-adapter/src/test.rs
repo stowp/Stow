@@ -710,13 +710,7 @@ fn deposit_rejects_when_active_strategy_cap_exceeded() {
     let (client, admin, _treasury, token) = setup_with_token(&env);
     let (_, id) = activate_mock_strategy(&env, &client, &admin, &token);
 
-    // `set_strategy_deposit_cap` is a separate issue; set the cap directly.
-    env.as_contract(&client.address, || {
-        let key = DataKey::Strategy(id);
-        let mut info: StrategyInfo = env.storage().persistent().get(&key).unwrap();
-        info.deposit_cap = 1_000;
-        env.storage().persistent().set(&key, &info);
-    });
+    client.set_strategy_deposit_cap(&admin, &id, &1_000);
 
     let user = funded_user(&env, &token, 1_500);
     client.deposit(&user, &1_000); // exactly at the cap is allowed
@@ -725,6 +719,122 @@ fn deposit_rejects_when_active_strategy_cap_exceeded() {
         Err(Ok(Error::StrategyCapExceeded))
     );
     assert_eq!(client.get_position(&user).shares, 1_000);
+}
+
+#[test]
+fn set_strategy_deposit_cap_persists_on_strategy_record() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+    let (_, other_id) = register_mock_strategy(&env, &client, &admin, &token);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 0);
+
+    client.set_strategy_deposit_cap(&admin, &id, &5_000);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 5_000);
+    // Caps are per strategy: the other record is untouched.
+    assert_eq!(client.get_strategy(&other_id).deposit_cap, 0);
+
+    // Overwriting, then resetting to `0` (unlimited), both stick.
+    client.set_strategy_deposit_cap(&admin, &id, &7_500);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 7_500);
+    client.set_strategy_deposit_cap(&admin, &id, &0);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 0);
+
+    // Only the cap changes — the rest of the record is preserved.
+    let info = client.get_strategy(&id);
+    assert_eq!(info.id, id);
+    assert_eq!(info.name, String::from_str(&env, "mock"));
+    assert_eq!(info.deregistered_at, None);
+}
+
+#[test]
+fn set_strategy_deposit_cap_zero_means_unlimited() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = activate_mock_strategy(&env, &client, &admin, &token);
+
+    client.set_strategy_deposit_cap(&admin, &id, &100);
+    let user = funded_user(&env, &token, 10_000);
+    assert_eq!(
+        client.try_deposit(&user, &101),
+        Err(Ok(Error::StrategyCapExceeded))
+    );
+
+    client.set_strategy_deposit_cap(&admin, &id, &0);
+    client.deposit(&user, &10_000);
+    assert_eq!(client.get_position(&user).shares, 10_000);
+}
+
+#[test]
+fn set_strategy_deposit_cap_on_inactive_strategy_has_no_live_effect() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, _active_id) = activate_mock_strategy(&env, &client, &admin, &token);
+    let (_, standby_id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    client.set_strategy_deposit_cap(&admin, &standby_id, &1);
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+    assert_eq!(client.get_position(&user).shares, 1_000);
+}
+
+#[test]
+fn set_strategy_deposit_cap_guards() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+    let outsider = Address::generate(&env);
+
+    assert_eq!(
+        client.try_set_strategy_deposit_cap(&outsider, &id, &1_000),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(
+        client.try_set_strategy_deposit_cap(&admin, &id, &-1),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        client.try_set_strategy_deposit_cap(&admin, &99, &1_000),
+        Err(Ok(Error::StrategyNotFound))
+    );
+
+    client.set_paused(&admin, &true);
+    assert_eq!(
+        client.try_set_strategy_deposit_cap(&admin, &id, &1_000),
+        Err(Ok(Error::Paused))
+    );
+
+    assert_eq!(client.get_strategy(&id).deposit_cap, 0);
+}
+
+#[test]
+fn set_strategy_deposit_cap_requires_admin_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    env.mock_auths(&[]);
+    assert!(matches!(
+        client.try_set_strategy_deposit_cap(&admin, &id, &1_000),
+        Err(Err(_))
+    ));
+
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_strategy_deposit_cap",
+            args: (admin.clone(), id, 1_000i128).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.set_strategy_deposit_cap(&admin, &id, &1_000);
+    assert_eq!(client.get_strategy(&id).deposit_cap, 1_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,7 +1425,7 @@ fn loss_reduces_exchange_rate_without_charging_fee() {
 //
 // Covers every mutating entrypoint implemented today. Still stubbed with
 // `unimplemented!()`, so not exercisable yet: `set_admin`, `set_treasury`,
-// `set_withdraw_cooldown`, `upgrade`, `set_strategy_deposit_cap`,
+// `set_withdraw_cooldown`, `upgrade`,
 // `request_withdraw`, `claim_withdraw` — add a case to both tests below as
 // each one lands.
 
@@ -1407,6 +1517,7 @@ fn assert_auth_harness_untouched(
     assert!(!client.is_paused());
     assert_eq!(client.list_strategies().len(), 2);
     assert!(client.get_strategy(&standby_id).deregistered_at.is_none());
+    assert_eq!(client.get_strategy(&standby_id).deposit_cap, 0);
     assert_eq!(active_strategy_id(env, client), Some(active_id));
     assert!(!withdraw_request_cancelled(env, client, 1));
     assert_eq!(client.total_shares(), 600);
@@ -2002,6 +2113,7 @@ fn mutating_entrypoints_reject_missing_signature() {
     assert_auth_rejected!(client.try_deregister_strategy(&admin, &standby_id));
     assert_auth_rejected!(client.try_set_active_strategy(&admin, &standby_id));
     assert_auth_rejected!(client.try_migrate_strategy(&admin, &standby_id));
+    assert_auth_rejected!(client.try_set_strategy_deposit_cap(&admin, &standby_id, &1_000));
     assert_auth_rejected!(client.try_emergency_withdraw_all(&admin));
     assert_auth_rejected!(client.try_deposit(&owner, &100));
     assert_auth_rejected!(client.try_cancel_withdraw(&owner, &1));
