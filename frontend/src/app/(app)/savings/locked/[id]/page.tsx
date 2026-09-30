@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Lock, Unlock } from "lucide-react";
 import { useSession } from "@/context/SessionProvider";
-import { useLockedPlanDetail } from "@/hooks/useLockedPlanDetail";
+import {
+  useLockedPlanDetail,
+  type LockedPlan,
+} from "@/hooks/useLockedPlanDetail";
+import {
+  useLockedTopUp,
+  validateTopUpAmount,
+  TOP_UP_AMOUNT_ERROR_MESSAGES,
+} from "@/hooks/useLockedTopUp";
 import { LockedPlanCountdown } from "@/components/savings/LockedPlanCountdown";
 import ErrorRetry from "@/components/ui/ErrorRetry";
 import { formatStroopsAmount } from "@/lib/currency";
@@ -43,10 +51,31 @@ export default function LockedPlanDetailPage({
 }) {
   const [id, setId] = useState<string | null>(null);
   const { address, loading: sessionLoading } = useSession();
-  const { plan, status, error, refetch } = useLockedPlanDetail(id, address);
+  const { plan: fetchedPlan, status, error, refetch } = useLockedPlanDetail(
+    id,
+    address,
+  );
+  const {
+    status: topUpStatus,
+    error: topUpError,
+    topUp,
+    reset: resetTopUp,
+  } = useLockedTopUp();
 
   // Tracks unlock reached live on this page, so the UI flips without a refetch.
   const [unlockedLive, setUnlockedLive] = useState(false);
+
+  // Balance reported back by a successful top-up, shown until the next fetch.
+  const [toppedUpBalance, setToppedUpBalance] = useState<string | null>(null);
+  const [topUpAmount, setTopUpAmount] = useState("");
+  const [topUpTouched, setTopUpTouched] = useState(false);
+  const [confirmingTopUp, setConfirmingTopUp] = useState(false);
+  const [lastTopUpAmount, setLastTopUpAmount] = useState<string | null>(null);
+
+  // A fresh fetch supersedes any locally-applied top-up balance.
+  useEffect(() => {
+    setToppedUpBalance(null);
+  }, [fetchedPlan]);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,7 +127,43 @@ export default function LockedPlanDetailPage({
     );
   }
 
-  if (!plan) return null;
+  if (!fetchedPlan) return null;
+
+  // Only the balance is taken from the top-up response: a top-up never
+  // changes when the plan unlocks, so `unlock_at` always comes from the
+  // fetched plan.
+  const plan: LockedPlan =
+    toppedUpBalance === null
+      ? fetchedPlan
+      : { ...fetchedPlan, balance: toppedUpBalance };
+
+  const topUpValidation = validateTopUpAmount(topUpAmount);
+  const showTopUpValidation = topUpTouched && topUpValidation !== null;
+  const topUpPending = topUpStatus === "pending";
+
+  const handleTopUpSubmit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setTopUpTouched(true);
+    if (topUpValidation) return;
+    resetTopUp();
+    setLastTopUpAmount(null);
+    setConfirmingTopUp(true);
+  };
+
+  const handleConfirmTopUp = async () => {
+    if (!address) return;
+    const amount = topUpAmount;
+    const updated = await topUp(plan.on_chain_id, address, amount);
+    if (updated) {
+      setToppedUpBalance(updated.balance);
+      setLastTopUpAmount(amount.trim());
+      setTopUpAmount("");
+      setTopUpTouched(false);
+      setConfirmingTopUp(false);
+    }
+    // On failure, stay on the confirmation step so the error shows next
+    // to the action that caused it and the user can retry or cancel.
+  };
 
   const isUnlocked =
     unlockedLive || new Date(plan.unlock_at).getTime() <= Date.now();
@@ -128,10 +193,108 @@ export default function LockedPlanDetailPage({
 
       <div className="rounded-2xl border border-border bg-card p-6 mb-6">
         <p className="text-sm text-muted mb-1">Locked balance</p>
-        <p className="text-2xl font-semibold text-foreground">
+        <p
+          data-testid="locked-plan-balance"
+          className="text-2xl font-semibold text-foreground"
+        >
           {formatStroopsAmount(plan.balance)} XLM
         </p>
       </div>
+
+      {!isUnlocked && (
+        <div className="rounded-2xl border border-border bg-card p-6 mb-6">
+          <h2 className="text-lg font-semibold text-foreground mb-2">Top up</h2>
+          <p className="text-sm text-muted mb-4">
+            Add funds to this plan. Topping up doesn&apos;t change the unlock
+            date.
+          </p>
+
+          {confirmingTopUp ? (
+            <div>
+              <p className="text-sm text-foreground mb-4">
+                Add {topUpAmount.trim()} XLM to this plan? It will stay locked
+                until{" "}
+                <time dateTime={plan.unlock_at}>
+                  {formatUnlockDate(plan.unlock_at)}
+                </time>
+                .
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleConfirmTopUp}
+                  disabled={topUpPending}
+                  className="flex-1 rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {topUpPending ? "Topping up..." : "Confirm top-up"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmingTopUp(false);
+                    resetTopUp();
+                  }}
+                  disabled={topUpPending}
+                  className="flex-1 rounded-xl border border-border px-4 py-2 text-sm font-medium text-foreground disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+              {topUpStatus === "error" && (
+                <p role="alert" className="mt-3 text-sm text-red-400">
+                  {topUpError?.message ?? "Failed to top up plan."}
+                </p>
+              )}
+            </div>
+          ) : (
+            <form onSubmit={handleTopUpSubmit} noValidate>
+              <label
+                htmlFor="locked-top-up-amount"
+                className="block text-sm font-medium text-foreground mb-1"
+              >
+                Amount (XLM)
+              </label>
+              <input
+                id="locked-top-up-amount"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="0.00"
+                value={topUpAmount}
+                onChange={(e) => {
+                  setTopUpAmount(e.target.value);
+                  setLastTopUpAmount(null);
+                }}
+                onBlur={() => setTopUpTouched(true)}
+                aria-invalid={showTopUpValidation}
+                aria-describedby={
+                  showTopUpValidation ? "locked-top-up-amount-error" : undefined
+                }
+                className="w-full rounded-xl border border-border bg-background px-3 py-2 text-foreground mb-2"
+              />
+              {showTopUpValidation && topUpValidation && (
+                <p
+                  id="locked-top-up-amount-error"
+                  className="text-sm text-red-400 mb-2"
+                >
+                  {TOP_UP_AMOUNT_ERROR_MESSAGES[topUpValidation]}
+                </p>
+              )}
+              <button
+                type="submit"
+                className="w-full rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white"
+              >
+                Top up
+              </button>
+              {lastTopUpAmount && (
+                <p role="status" className="mt-3 text-sm text-brand">
+                  Added {lastTopUpAmount} XLM to this plan.
+                </p>
+              )}
+            </form>
+          )}
+        </div>
+      )}
 
       <div className="rounded-2xl border border-border bg-card p-6 mb-6">
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">

@@ -172,33 +172,33 @@ pub fn register_strategy(
 /// - Errors `Error::StrategyActive` if `strategy_id` is the currently active
 ///   strategy — migrate away from it first via `migrate_strategy`.
 /// - A deregistered strategy's id can never be re-registered or reactivated;
-///   `deregistered_at` is permanent.
+///   `deregistered_at` is permanent. The record itself is kept, so
+///   `get_strategy` / `list_strategies` still return it with
+///   `deregistered_at` set.
+/// - Errors `Error::StrategyNotFound` if `strategy_id` is unknown or already
+///   deregistered — a repeat call must not overwrite the original
+///   `deregistered_at` (same "deregistered == not found" convention as
+///   `set_active_strategy`).
 /// - Emits a `strategy_deregistered` event.
+/// - Errors `Error::Paused` while paused.
 pub fn deregister_strategy(env: &Env, caller: Address, strategy_id: u64) -> Result<(), Error> {
+    extend_instance_ttl(env);
     admin::require_admin(env, &caller)?;
     admin::require_not_paused(env)?;
 
-    let active: Option<u64> = env.storage().instance().get(&DataKey::ActiveStrategy);
-    if active == Some(strategy_id) {
+    if active_strategy_id(env) == Some(strategy_id) {
         return Err(Error::StrategyActive);
     }
 
-    let key = DataKey::Strategy(strategy_id);
-    let mut info: StrategyInfo = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .ok_or(Error::StrategyNotFound)?;
+    let mut info = get_strategy(env, strategy_id)?;
+    if info.deregistered_at.is_some() {
+        return Err(Error::StrategyNotFound);
+    }
 
-    extend_instance_ttl(env);
     info.deregistered_at = Some(env.ledger().timestamp());
-    env.storage().persistent().set(&key, &info);
-    storage::extend_persistent_ttl(env, &key);
+    save_strategy(env, &info);
 
-    env.events().publish(
-        (events::TOPIC_STRATEGY_DEREGISTERED,),
-        (strategy_id, env.ledger().timestamp()),
-    );
+    events::publish_strategy_deregistered(env, strategy_id);
 
     Ok(())
 }

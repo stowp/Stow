@@ -24,7 +24,7 @@ use crate::accounting::mul_div_floor;
 use crate::error::Error;
 use crate::events::{
     self, EVENT_SCHEMA_VERSION, TOPIC_ADMIN_SET, TOPIC_DEPOSITED, TOPIC_INIT, TOPIC_PAUSED_CHANGED,
-    TOPIC_STRATEGY_CHANGED, TOPIC_STRATEGY_REGISTERED, TOPIC_UPGRADED, TOPIC_WITHDRAW_CANCELLED,
+    TOPIC_STRATEGY_CHANGED, TOPIC_STRATEGY_DEREGISTERED, TOPIC_STRATEGY_REGISTERED, TOPIC_UPGRADED, TOPIC_WITHDRAW_CANCELLED,
     TOPIC_WITHDRAW_CLAIMED, TOPIC_WITHDRAW_REQUESTED,
 };
 use crate::fees::compute_performance_fee;
@@ -375,9 +375,142 @@ fn set_paused_toggles_and_emits_paused_changed_each_call() {
     assert!(!client.is_paused());
 }
 
-/// `admin::upgrade` itself is a separate, still-unimplemented issue (it
-/// needs an uploaded Wasm to swap to). This pins the `upgraded` payload the
-/// typed publisher emits, so `upgrade` only has to call it.
+#[test]
+fn set_treasury_updates_treasury_immediately() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, treasury, _token) = setup_with_token(&env);
+    let new_treasury = Address::generate(&env);
+    assert_eq!(client.treasury(), treasury);
+
+    client.set_treasury(&admin, &new_treasury);
+    assert_eq!(client.treasury(), new_treasury);
+}
+
+#[test]
+fn set_treasury_rejects_non_admin_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, treasury, _token) = setup_with_token(&env);
+    let outsider = Address::generate(&env);
+
+    // Signed by the outsider, but the outsider is not the admin.
+    assert_eq!(
+        client.try_set_treasury(&outsider, &outsider),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(client.treasury(), treasury);
+}
+
+#[test]
+fn set_treasury_requires_admin_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, treasury, _token) = setup_with_token(&env);
+    let attacker = Address::generate(&env);
+
+    // Nobody signs: passing the admin's address as `caller` is not enough.
+    env.set_auths(&[]);
+    assert!(client.try_set_treasury(&admin, &attacker).is_err());
+    assert_eq!(client.treasury(), treasury);
+}
+
+#[test]
+fn set_treasury_before_initialize_is_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = setup(&env);
+    let who = Address::generate(&env);
+    assert_eq!(
+        client.try_set_treasury(&who, &who),
+        Err(Ok(Error::NotInitialized))
+    );
+}
+
+/// Already-accrued fees are not swept on rotation: the next `withdraw_fees`
+/// pays the *new* treasury, and the old one receives nothing.
+#[test]
+fn withdraw_fees_after_set_treasury_pays_new_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, old_treasury, token) = setup_with_token(&env);
+    let new_treasury = Address::generate(&env);
+
+    // Seed accrued fees (backed by real tokens on the adapter) directly, to
+    // isolate the treasury routing from harvest's own behavior.
+    mint(&env, &token, &client.address, 5_000);
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::FeesAccrued, &5_000i128);
+    });
+
+    client.set_treasury(&admin, &new_treasury);
+    assert_eq!(client.fees_accrued(), 5_000, "rotation must not sweep fees");
+
+    assert_eq!(client.withdraw_fees(&Address::generate(&env)), 5_000);
+    assert_eq!(balance_of(&env, &token, &new_treasury), 5_000);
+    assert_eq!(balance_of(&env, &token, &old_treasury), 0);
+    assert_eq!(client.fees_accrued(), 0);
+}
+
+#[test]
+fn upgrade_rejects_non_admin_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury, _token) = setup_with_token(&env);
+    let outsider = Address::generate(&env);
+    let hash = BytesN::from_array(&env, &[1u8; 32]);
+
+    // Signed by the outsider, but the outsider is not the admin: rejected
+    // with a typed error before the host is ever asked to swap Wasm.
+    assert_eq!(
+        client.try_upgrade(&outsider, &hash),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(adapter_events(&env, &client, TOPIC_UPGRADED).len(), 0);
+}
+
+#[test]
+fn upgrade_requires_admin_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, _token) = setup_with_token(&env);
+    let hash = BytesN::from_array(&env, &[1u8; 32]);
+
+    env.set_auths(&[]);
+    assert!(client.try_upgrade(&admin, &hash).is_err());
+}
+
+#[test]
+fn upgrade_before_initialize_is_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = setup(&env);
+    let who = Address::generate(&env);
+    let hash = BytesN::from_array(&env, &[1u8; 32]);
+    assert_eq!(
+        client.try_upgrade(&who, &hash),
+        Err(Ok(Error::NotInitialized))
+    );
+}
+
+/// A hash that was never uploaded makes the host trap; the call fails as a
+/// whole, so no `upgraded` event is left behind and the admin is unchanged.
+#[test]
+fn upgrade_to_unknown_wasm_hash_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, _token) = setup_with_token(&env);
+    let hash = BytesN::from_array(&env, &[9u8; 32]);
+
+    assert!(client.try_upgrade(&admin, &hash).is_err());
+    assert_eq!(client.admin(), admin);
+}
+
+/// Pins the `upgraded` payload the typed publisher emits. A full swap test
+/// (`upgrade` succeeding and emitting it) needs a second compiled Wasm
+/// fixture to upload via `env.deployer().upload_contract_wasm`.
 #[test]
 fn upgraded_publisher_emits_documented_payload() {
     let env = Env::default();
@@ -620,19 +753,125 @@ fn deregistered_strategy_cannot_be_activated() {
     env.mock_all_auths();
     let (client, admin, _treasury, token) = setup_with_token(&env);
     let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
-
-    // `deregister_strategy` is a separate issue; mark it deregistered directly.
-    env.as_contract(&client.address, || {
-        let key = DataKey::Strategy(id);
-        let mut info: StrategyInfo = env.storage().persistent().get(&key).unwrap();
-        info.deregistered_at = Some(1);
-        env.storage().persistent().set(&key, &info);
-    });
+    client.deregister_strategy(&admin, &id);
 
     assert_eq!(
         client.try_set_active_strategy(&admin, &id),
         Err(Ok(Error::StrategyNotFound))
     );
+}
+
+#[test]
+fn deregister_inactive_strategy_sets_deregistered_at_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(100);
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (strategy, id) = register_mock_strategy(&env, &client, &admin, &token);
+
+    env.ledger().set_timestamp(250);
+    client.deregister_strategy(&admin, &id);
+
+    let (topics, data) = single_event(&env, &client, TOPIC_STRATEGY_DEREGISTERED);
+    let expected_topics: Vec<Val> =
+        (Symbol::new(&env, TOPIC_STRATEGY_DEREGISTERED), id).into_val(&env);
+    assert_eq!(topics, expected_topics);
+    assert_eq!(decode::<(u64, u64)>(&env, &data), (id, 250));
+
+    // The record is kept (history stays readable) with `deregistered_at` set.
+    let expected = StrategyInfo {
+        id,
+        address: strategy.address.clone(),
+        name: String::from_str(&env, "mock"),
+        deposit_cap: 0,
+        registered_at: 100,
+        deregistered_at: Some(250),
+    };
+    assert_eq!(client.get_strategy(&id), expected);
+    assert_eq!(client.list_strategies(), soroban_sdk::vec![&env, expected]);
+}
+
+#[test]
+fn deregister_active_strategy_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = activate_mock_strategy(&env, &client, &admin, &token);
+
+    assert_eq!(
+        client.try_deregister_strategy(&admin, &id),
+        Err(Ok(Error::StrategyActive))
+    );
+    assert_eq!(client.get_strategy(&id).deregistered_at, None);
+    assert_eq!(adapter_events(&env, &client, TOPIC_STRATEGY_DEREGISTERED).len(), 0);
+}
+
+#[test]
+fn deregister_strategy_is_permanent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(10);
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+    client.deregister_strategy(&admin, &id);
+
+    // A repeat call is rejected and does not move the original timestamp.
+    env.ledger().set_timestamp(20);
+    assert_eq!(
+        client.try_deregister_strategy(&admin, &id),
+        Err(Ok(Error::StrategyNotFound))
+    );
+    assert_eq!(client.get_strategy(&id).deregistered_at, Some(10));
+
+    // It can never become active again.
+    assert_eq!(
+        client.try_set_active_strategy(&admin, &id),
+        Err(Ok(Error::StrategyNotFound))
+    );
+}
+
+#[test]
+fn deregister_strategy_rejects_unknown_id_non_admin_and_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (_, id) = register_mock_strategy(&env, &client, &admin, &token);
+    let outsider = Address::generate(&env);
+
+    assert_eq!(
+        client.try_deregister_strategy(&admin, &99),
+        Err(Ok(Error::StrategyNotFound))
+    );
+    assert_eq!(
+        client.try_deregister_strategy(&outsider, &id),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    client.set_paused(&admin, &true);
+    assert_eq!(
+        client.try_deregister_strategy(&admin, &id),
+        Err(Ok(Error::Paused))
+    );
+    assert_eq!(client.get_strategy(&id).deregistered_at, None);
+}
+
+/// The duplicate-address check only considers live registrations, so the
+/// same address can be registered again under a fresh id after
+/// deregistration; the old id stays deregistered.
+#[test]
+fn deregistered_address_can_be_registered_under_new_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (strategy, id) = register_mock_strategy(&env, &client, &admin, &token);
+    client.deregister_strategy(&admin, &id);
+
+    let new_id =
+        client.register_strategy(&admin, &strategy.address, &String::from_str(&env, "again"));
+    assert_ne!(new_id, id);
+    assert!(client.get_strategy(&id).deregistered_at.is_some());
+    assert_eq!(client.get_strategy(&new_id).deregistered_at, None);
+    assert_eq!(client.list_strategies().len(), 2);
 }
 
 // ---------------------------------------------------------------------------

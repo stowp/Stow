@@ -269,3 +269,14 @@ pub fn publish_strategy_changed(env: &Env, from: Option<u64>, to: Option<u64>, a
         (from, to, assets_moved, env.ledger().timestamp()),
     );
 }
+
+/// `strategy_deregistered` — topics `(strategy_deregistered, strategy_id)`,
+/// data `(strategy_id: u64, timestamp: u64)`.
+///
+/// `timestamp` equals the `deregistered_at` persisted on the strategy record.
+pub fn publish_strategy_deregistered(env: &Env, strategy_id: u64) {
+    env.events().publish(
+        (Symbol::new(env, TOPIC_STRATEGY_DEREGISTERED), strategy_id),
+        (strategy_id, env.ledger().timestamp()),
+    );
+}

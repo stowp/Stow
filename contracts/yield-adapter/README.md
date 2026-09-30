@@ -223,6 +223,11 @@ stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
 - **Auth:** current admin (`caller`).
 - **Errors:** `NotInitialized`, `Unauthorized`.
 - **Events:** none.
+- **Behavior:** takes effect immediately — `treasury()` returns the new
+  address and every later `withdraw_fees` pays it. Already-accrued fees are
+  **not** swept on change; they go to whichever treasury is configured when
+  `withdraw_fees` next runs. Call `withdraw_fees` first if the outgoing
+  treasury should receive them.
 ```bash
 stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
   -- set_treasury --caller $ADMIN_ADDRESS --new_treasury $NEW_TREASURY_ADDRESS
@@ -299,8 +304,11 @@ stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
 
 #### `upgrade(caller: Address, new_wasm_hash: BytesN<32>) -> Result<(), Error>`
 - **Auth:** current admin (`caller`).
-- **Errors:** `Unauthorized`.
+- **Errors:** `NotInitialized`, `Unauthorized`.
 - **Events:** [`upgraded`](#upgraded).
+- **Trust:** the admin key can replace contract logic outright, including
+  custody rules. Storage is not migrated automatically. `new_wasm_hash` must
+  already be uploaded (`stellar contract upload`).
 ```bash
 stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
   -- upgrade --caller $ADMIN_ADDRESS --new_wasm_hash <64-char-hex-hash>
@@ -321,8 +329,11 @@ stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
 
 #### `deregister_strategy(caller: Address, strategy_id: u64) -> Result<(), Error>`
 - **Auth:** current admin (`caller`).
-- **Errors:** `Unauthorized`, `StrategyNotFound`, `StrategyActive` (cannot deregister the currently active strategy).
+- **Errors:** `Unauthorized`, `Paused`, `StrategyNotFound` (unknown or already deregistered), `StrategyActive` (cannot deregister the currently active strategy).
 - **Events:** [`strategy_deregistered`](#strategy_deregistered).
+- **Behavior:** sets `deregistered_at` permanently. The strategy can never be
+  reactivated; `get_strategy` / `list_strategies` keep returning it with
+  `deregistered_at` set.
 ```bash
 stellar contract invoke --id $CONTRACT_ID --source admin --network testnet \
   -- deregister_strategy --caller $ADMIN_ADDRESS --strategy_id 1
@@ -625,12 +636,11 @@ Topics, grouped by area:
   [`withdraw_claimed`](#withdraw_claimed),
   [`withdraw_cancelled`](#withdraw_cancelled)
 - Strategy: [`strategy_registered`](#strategy_registered),
-  `strategy_deregistered`, [`strategy_changed`](#strategy_changed)
+  [`strategy_deregistered`](#strategy_deregistered), [`strategy_changed`](#strategy_changed)
 - Harvest/fees: `harvested`, `fee_collected`
 
-`strategy_deregistered`, `harvested`, and `fee_collected` payloads will be
-documented here alongside the entrypoints that emit them (still
-unimplemented).
+`harvested` and `fee_collected` payloads will be documented here alongside
+the entrypoints that emit them (still unimplemented).
 
 ### Lifecycle
 
@@ -741,6 +751,15 @@ Topics: `(Symbol("strategy_registered"), strategy_id: u64)`
 | `address` | `Address` | Strategy contract address. |
 | `name` | `String` | Human-readable name. |
 | `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `strategy_deregistered`
+Emitted at the end of a successful `deregister_strategy`.
+Topics: `(Symbol("strategy_deregistered"), strategy_id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `strategy_id` | `u64` | Deregistered strategy id. |
+| `timestamp` | `u64` | Ledger timestamp of the call; equals the record's `deregistered_at`. |
 
 #### `strategy_changed`
 Emitted at the end of a successful `set_active_strategy` (`from: None`),
