@@ -24,7 +24,9 @@ pub const MAX_PERFORMANCE_FEE_BPS: u32 = 3_000; // 30%
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Validate a proposed performance fee. Errors `Error::FeeTooHigh` if
-/// `bps > MAX_PERFORMANCE_FEE_BPS`.
+/// `bps > MAX_PERFORMANCE_FEE_BPS`. The single source of truth for the cap:
+/// both `admin::set_performance_fee_bps` (write time) and
+/// [`compute_performance_fee`] (use time) go through it.
 pub fn validate_fee_bps(bps: u32) -> Result<(), Error> {
     if bps > MAX_PERFORMANCE_FEE_BPS {
         return Err(Error::FeeTooHigh);
@@ -56,9 +58,7 @@ pub fn compute_performance_fee(env: &Env, yield_amount: i128, bps: u32) -> Resul
     if yield_amount < 0 {
         return Err(Error::InvalidAmount);
     }
-    if bps > MAX_PERFORMANCE_FEE_BPS {
-        return Err(Error::FeeTooHigh);
-    }
+    validate_fee_bps(bps)?;
     mul_div_floor(env, yield_amount, i128::from(bps), BPS_DENOMINATOR)
 }
 
