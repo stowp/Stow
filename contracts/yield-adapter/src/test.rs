@@ -1002,8 +1002,9 @@ fn withdraw_events_fire_with_expected_fields() {
 // pause
 // ---------------------------------------------------------------------------
 
-/// `harvest` is also on the pause blocklist, but `harvest::harvest` is a
-/// separate, still-unimplemented issue, so it is not exercised here.
+/// Every entrypoint on the pause blocklist (`deposit`, `request_withdraw`,
+/// `harvest`, strategy mutations) rejects with `Error::Paused`, while
+/// `claim_withdraw`, `cancel_withdraw` and reads keep working.
 #[test]
 fn paused_blocks_mutations_but_not_claim_withdraw() {
     let env = Env::default();
@@ -1031,6 +1032,19 @@ fn paused_blocks_mutations_but_not_claim_withdraw() {
         client.try_set_active_strategy(&admin, &strategy_id),
         Err(Ok(Error::Paused))
     );
+    assert_eq!(
+        client.try_migrate_strategy(&admin, &strategy_id),
+        Err(Ok(Error::Paused))
+    );
+    assert_eq!(
+        client.try_deregister_strategy(&admin, &strategy_id),
+        Err(Ok(Error::Paused))
+    );
+    assert_eq!(
+        client.try_harvest(&Address::generate(&env)),
+        Err(Ok(Error::Paused))
+    );
+    assert!(client.get_strategy(&strategy_id).deregistered_at.is_none());
 
     // Users mid-withdrawal are never trapped, and reads keep working.
     assert_eq!(client.claim_withdraw(&user, &to_claim), 300);
@@ -1041,6 +1055,45 @@ fn paused_blocks_mutations_but_not_claim_withdraw() {
     client.set_paused(&admin, &false);
     let more = funded_user(&env, &token, 10);
     assert_eq!(client.deposit(&more, &10), 10);
+}
+
+/// A request queued before the pause whose assets sit in the active
+/// strategy can still be claimed: the claim-side shortfall pull is not
+/// blocked, so funds mid-withdrawal are never trapped.
+#[test]
+fn paused_claim_withdraw_still_pulls_shortfall_from_strategy() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, token) = setup_with_token(&env);
+    let (strategy, _) = activate_mock_strategy(&env, &client, &admin, &token);
+    let user = funded_user(&env, &token, 1_000);
+    client.deposit(&user, &1_000);
+    let request_id = client.request_withdraw(&user, &600);
+
+    client.set_paused(&admin, &true);
+
+    assert_eq!(client.claim_withdraw(&user, &request_id), 600);
+    assert_eq!(balance_of(&env, &token, &user), 600);
+    assert_eq!(strategy.balance(&client.address), 400);
+    assert!(client.is_paused());
+}
+
+#[test]
+fn require_not_paused_tracks_the_flag() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, _token) = setup_with_token(&env);
+
+    let guard = |env: &Env| env.as_contract(&client.address, || crate::admin::require_not_paused(env));
+    assert!(!client.is_paused());
+    assert_eq!(guard(&env), Ok(()));
+
+    client.set_paused(&admin, &true);
+    assert!(client.is_paused());
+    assert_eq!(guard(&env), Err(Error::Paused));
+
+    client.set_paused(&admin, &false);
+    assert_eq!(guard(&env), Ok(()));
 }
 
 // ---------------------------------------------------------------------------
