@@ -2391,6 +2391,70 @@ fn set_performance_fee_bps_rejects_above_cap() {
 }
 
 #[test]
+fn set_performance_fee_bps_persists_value_up_to_the_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, _token) = setup_with_token(&env);
+    assert_eq!(client.performance_fee_bps(), 0);
+
+    client.set_performance_fee_bps(&admin, &1_500);
+    assert_eq!(client.performance_fee_bps(), 1_500);
+
+    // Exactly at the cap is allowed; zero switches the fee back off.
+    client.set_performance_fee_bps(&admin, &crate::fees::MAX_PERFORMANCE_FEE_BPS);
+    assert_eq!(
+        client.performance_fee_bps(),
+        crate::fees::MAX_PERFORMANCE_FEE_BPS
+    );
+    client.set_performance_fee_bps(&admin, &0);
+    assert_eq!(client.performance_fee_bps(), 0);
+}
+
+#[test]
+fn set_performance_fee_bps_rejection_leaves_previous_value() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _treasury, _token) = setup_with_token(&env);
+    client.set_performance_fee_bps(&admin, &1_000);
+
+    assert_eq!(
+        client.try_set_performance_fee_bps(&admin, &(crate::fees::MAX_PERFORMANCE_FEE_BPS + 1)),
+        Err(Ok(Error::FeeTooHigh))
+    );
+    assert_eq!(
+        client.try_set_performance_fee_bps(&admin, &u32::MAX),
+        Err(Ok(Error::FeeTooHigh))
+    );
+    assert_eq!(client.performance_fee_bps(), 1_000);
+}
+
+#[test]
+fn set_performance_fee_bps_rejects_non_admin_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _treasury, _token) = setup_with_token(&env);
+    let outsider = Address::generate(&env);
+
+    assert_eq!(
+        client.try_set_performance_fee_bps(&outsider, &1_000),
+        Err(Ok(Error::Unauthorized))
+    );
+    assert_eq!(client.performance_fee_bps(), 0);
+}
+
+#[test]
+fn set_performance_fee_bps_before_initialize_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = setup(&env);
+
+    assert_eq!(
+        client.try_set_performance_fee_bps(&Address::generate(&env), &1_000),
+        Err(Ok(Error::NotInitialized))
+    );
+}
+
+#[test]
 fn harvest_respects_the_configured_interval() {
     let env = Env::default();
     env.mock_all_auths();
