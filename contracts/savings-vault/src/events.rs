@@ -1,4 +1,4 @@
-//! Event topic registry.
+﻿//! Event topic registry.
 //!
 //! The off-chain indexer decodes contract events by topic. This module is
 //! the canonical, compile-checked registry of topic name strings; the full
@@ -100,3 +100,26 @@ pub const TOPIC_INTEREST_WITHDRAW: &str = "interest_withdraw";
 /// Emitted at the end of a successful `interest_claim` call, recording the
 /// interest credited to principal.
 pub const TOPIC_INTEREST_CLAIMED: &str = "interest_claimed";
+
+// --- inheritance (issue #439) ------------------------------------------
+/// Emitted at the end of a successful `designate_beneficiary` call.
+pub const TOPIC_INHERITANCE_BENEFICIARY_SET: &str = "inherit_benef_set";
+/// Emitted at the end of a successful `remove_beneficiary` call.
+pub const TOPIC_INHERITANCE_BENEFICIARY_REMOVED: &str = "inherit_benef_rm";
+/// Emitted at the end of a successful `set_inactivity_timeout` call.
+pub const TOPIC_INHERITANCE_TIMEOUT_SET: &str = "inherit_timeout_set";
+/// Emitted at the end of a successful `claim_inheritance` call.
+pub const TOPIC_INHERITANCE_CLAIMED: &str = "inherit_claimed";
+
+// --- challenges (issue #442) -------------------------------------------
+/// Emitted at the end of a successful `create_challenge` call.
+pub const TOPIC_CHALLENGE_CREATED: &str = "challenge_created";
+/// Emitted at the end of a successful `join_challenge` call.
+pub const TOPIC_CHALLENGE_JOINED: &str = "challenge_joined";
+/// Emitted at the end of a successful `save_challenge` call.
+pub const TOPIC_CHALLENGE_SAVED: &str = "challenge_saved";
+/// Emitted at the end of a successful `claim_winner` call.
+pub const TOPIC_CHALLENGE_WON: &str = "challenge_won";
+/// Emitted at the end of a successful `refund_expired` call.
+pub const TOPIC_CHALLENGE_EXPIRED: &str = "challenge_expired";
+

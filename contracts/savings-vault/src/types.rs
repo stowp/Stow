@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Map, String, Vec};
+﻿use soroban_sdk::{contracttype, Address, Map, String, Vec};
 
 /// A flexible savings account: deposit and withdraw any time.
 #[contracttype]
@@ -161,6 +161,94 @@ pub struct InterestAccount {
     pub updated_at: u64,
 }
 
+// ── Inheritance types (issue #439) ────────────────────────────────────────
+
+/// A single beneficiary in an inheritance plan, with their share.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Beneficiary {
+    /// Address that will receive funds when the inheritance is claimed.
+    pub address: Address,
+    /// This beneficiary's share of the balance, in basis points (1/100 %).
+    /// All beneficiaries in a plan must sum to exactly `10_000`.
+    pub share_bps: u32,
+}
+
+/// An inheritance plan for a flexible savings account.
+///
+/// The owner designates beneficiaries and configures an inactivity timeout.
+/// Once `now >= last_active_at + inactivity_timeout` and beneficiary shares
+/// sum to `10_000`, any beneficiary may call `claim_inheritance`.
+///
+/// Stored under [`DataKey::Inheritance(owner)`] in persistent storage.
+#[contracttype]
+#[derive(Clone)]
+pub struct InheritancePlan {
+    pub owner: Address,
+    /// Ordered list of beneficiaries. Shares must sum to `10_000` bps before
+    /// a claim is accepted.
+    pub beneficiaries: Vec<Beneficiary>,
+    /// Seconds of inactivity before beneficiaries may claim. `0` means
+    /// inheritance is disabled.
+    pub inactivity_timeout: u64,
+    /// Ledger timestamp of the owner's most recent deposit or withdrawal.
+    /// Updated by `inheritance::touch_owner` on every flexible-module write.
+    pub last_active_at: u64,
+}
+
+// ── Savings challenge types (issue #442) ─────────────────────────────────
+
+/// Lifecycle state of a [`Challenge`].
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ChallengeStatus {
+    /// Accepting joins and savings; no winner yet.
+    Open,
+    /// A participant reached the target and claimed the prize.
+    Won,
+    /// Deadline passed without a winner; entry fees have been (or may be)
+    /// refunded via `refund_expired`.
+    Expired,
+}
+
+/// One participant's record inside a [`Challenge`].
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChallengeParticipant {
+    pub address: Address,
+    /// Total stroops saved toward the challenge target so far.
+    pub saved: i128,
+    /// Entry fee paid when joining (always `== challenge.entry_fee`; stored
+    /// here for refund convenience without re-reading the challenge).
+    pub fee_paid: i128,
+}
+
+/// A savings challenge: participants race to save `target_amount` by `deadline`.
+///
+/// Stored under [`DataKey::Challenge(id)`] in persistent storage.
+#[contracttype]
+#[derive(Clone)]
+pub struct Challenge {
+    pub id: u64,
+    pub creator: Address,
+    /// Stroops each participant must save to qualify as a winner.
+    pub target_amount: i128,
+    /// Stroops each participant pays to join (forms the prize pool).
+    pub entry_fee: i128,
+    /// Ledger timestamp after which no new joins or winner claims are accepted.
+    pub deadline: u64,
+    /// Minimum number of participants that must have joined before a winner
+    /// can be declared. Must be ≥ 2.
+    pub min_participants: u32,
+    /// Running sum of all entry fees; paid to the winner on `claim_winner`.
+    pub prize_pool: i128,
+    pub status: ChallengeStatus,
+    /// Set on `claim_winner`.
+    pub winner: Option<Address>,
+    pub participants: Vec<ChallengeParticipant>,
+    pub created_at: u64,
+}
+
 /// Storage keys. One variant per logical record family.
 ///
 /// See `storage` module docs for the full storage model: durability
@@ -295,4 +383,25 @@ pub enum DataKey {
     ///
     /// Durability: instance. TTL: same as `InterestRateBps`.
     InterestFrequency,
+
+    // ── Issue #439: savings inheritance ────────────────────────────────────
+    /// [`InheritancePlan`] by owner address.
+    ///
+    /// Durability: persistent — one entry per owner who has designated at
+    /// least one beneficiary. TTL: bumped on every read/write via
+    /// `extend_persistent_ttl`.
+    Inheritance(Address),
+
+    // ── Issue #442: savings challenges ─────────────────────────────────────
+    /// [`Challenge`] by id.
+    ///
+    /// Durability: persistent — one entry per challenge. TTL: bumped on
+    /// every read/write via `extend_persistent_ttl`.
+    Challenge(u64),
+    /// Monotonic counter for challenge ids.
+    ///
+    /// Durability: instance — small, hot counter incremented on every
+    /// `create_challenge`. TTL: bumped alongside the rest of instance storage.
+    NextChallengeId,
 }
+

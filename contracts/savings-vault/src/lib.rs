@@ -1,4 +1,4 @@
-#![no_std]
+﻿#![no_std]
 //! # Stow Savings Vault
 //!
 //! Non-custodial savings on Soroban. Funds move only under contract rules.
@@ -22,7 +22,9 @@ mod flexible;
 mod goal;
 mod group;
 mod group_split;
+mod inheritance;
 mod interest;
+mod challenge;
 mod locked;
 mod storage;
 mod types;
@@ -35,7 +37,8 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map, String};
 
 use crate::error::Error;
 use crate::types::{
-    CompoundFrequency, FlexibleAccount, Goal, Group, InterestAccount, LockedPlan, Proposal,
+    Challenge, CompoundFrequency, FlexibleAccount, Goal, Group, InheritancePlan, InterestAccount,
+    LockedPlan, Proposal,
 };
 
 #[contract]
@@ -331,4 +334,106 @@ impl SavingsVault {
     pub fn interest_accrued(env: Env, owner: Address) -> Result<i128, Error> {
         interest::accrued(&env, owner)
     }
+
+    // --- inheritance (issue #439) -------------------------------------------
+
+    /// Designate a beneficiary for the caller's flexible savings balance.
+    ///
+    /// Creates the inheritance plan on the first call. Pass `share_bps` in
+    /// basis points (1–10_000). To enable claiming, all beneficiary shares must
+    /// sum to exactly 10_000 and an inactivity timeout must be configured.
+    pub fn designate_beneficiary(
+        env: Env,
+        owner: Address,
+        beneficiary: Address,
+        share_bps: u32,
+    ) -> Result<(), Error> {
+        inheritance::designate_beneficiary(&env, owner, beneficiary, share_bps)
+    }
+
+    /// Remove a beneficiary from the caller's inheritance plan.
+    pub fn remove_beneficiary(
+        env: Env,
+        owner: Address,
+        beneficiary: Address,
+    ) -> Result<(), Error> {
+        inheritance::remove_beneficiary(&env, owner, beneficiary)
+    }
+
+    /// Set the inactivity timeout (in seconds) for the caller's inheritance plan.
+    ///
+    /// Once `now >= last_active_at + timeout` and beneficiary shares sum to
+    /// 10_000, any beneficiary may call `claim_inheritance`. Setting `0`
+    /// disables automatic inheritance.
+    pub fn set_inactivity_timeout(
+        env: Env,
+        owner: Address,
+        timeout_seconds: u64,
+    ) -> Result<(), Error> {
+        inheritance::set_inactivity_timeout(&env, owner, timeout_seconds)
+    }
+
+    /// Claim the inheritance of `owner`'s flexible balance.
+    ///
+    /// Succeeds when: a plan exists, the inactivity timeout has elapsed,
+    /// beneficiary shares sum to 10_000, and `claimer` is a designated
+    /// beneficiary. Each beneficiary receives their proportional share.
+    pub fn claim_inheritance(env: Env, claimer: Address, owner: Address) -> Result<(), Error> {
+        inheritance::claim_inheritance(&env, claimer, owner)
+    }
+
+    /// Read the inheritance plan for `owner`.
+    pub fn get_inheritance_plan(env: Env, owner: Address) -> Result<InheritancePlan, Error> {
+        inheritance::get_plan(&env, owner)
+    }
+
+    // --- challenges (issue #442) ---------------------------------------------
+
+    /// Create a new savings challenge.
+    ///
+    /// `creator` becomes the first participant and pays the `entry_fee`.
+    /// Returns the challenge id.
+    pub fn create_challenge(
+        env: Env,
+        creator: Address,
+        target_amount: i128,
+        entry_fee: i128,
+        deadline: u64,
+        min_participants: u32,
+    ) -> Result<u64, Error> {
+        challenge::create(&env, creator, target_amount, entry_fee, deadline, min_participants)
+    }
+
+    /// Join a savings challenge and pay the entry fee.
+    pub fn join_challenge(env: Env, participant: Address, challenge_id: u64) -> Result<(), Error> {
+        challenge::join(&env, participant, challenge_id)
+    }
+
+    /// Deposit savings toward the caller's target within a challenge.
+    pub fn save_challenge(
+        env: Env,
+        participant: Address,
+        challenge_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
+        challenge::save(&env, participant, challenge_id, amount)
+    }
+
+    /// Verify on-chain that the caller has reached the target and claim the
+    /// prize pool.
+    pub fn claim_winner(env: Env, participant: Address, challenge_id: u64) -> Result<(), Error> {
+        challenge::claim_winner(&env, participant, challenge_id)
+    }
+
+    /// Refund all entry fees after the deadline has passed without a winner.
+    /// Permissionless — any address may trigger.
+    pub fn refund_expired(env: Env, caller: Address, challenge_id: u64) -> Result<(), Error> {
+        challenge::refund_expired(&env, caller, challenge_id)
+    }
+
+    /// Read a challenge by id.
+    pub fn get_challenge(env: Env, challenge_id: u64) -> Result<Challenge, Error> {
+        challenge::get_challenge(&env, challenge_id)
+    }
 }
+
