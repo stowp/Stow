@@ -103,7 +103,10 @@ pub fn require_not_paused(env: &Env) -> Result<(), Error> {
 /// Defaults to `0` (unlimited) before `set_deposit_cap` has ever been
 /// called.
 pub fn deposit_cap(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::DepositCap).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::DepositCap)
+        .unwrap_or(0)
 }
 
 /// Set the per-account deposit cap. Admin-only. `0` disables the cap.
@@ -132,7 +135,10 @@ pub fn set_deposit_cap(env: &Env, cap: i128) -> Result<(), Error> {
 /// Defaults to `0` (no minimum) before `set_min_deposit` has ever been
 /// called.
 pub fn min_deposit(env: &Env) -> i128 {
-    env.storage().instance().get(&DataKey::MinDeposit).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::MinDeposit)
+        .unwrap_or(0)
 }
 
 /// Set the minimum deposit amount. Admin-only. `0` disables the minimum.
@@ -277,7 +283,8 @@ pub fn upgrade(env: &Env, caller: Address, new_wasm_hash: BytesN<32>) -> Result<
         return Err(Error::Unauthorized);
     }
 
-    env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+    env.deployer()
+        .update_current_contract_wasm(new_wasm_hash.clone());
 
     env.events().publish(
         (TOPIC_UPGRADED,),

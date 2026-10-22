@@ -9,9 +9,10 @@
 //! the bare contract shell (no token) can still call [`setup`].
 
 use soroban_sdk::{
+    contract, contractclient, contractimpl,
     testutils::{Address as _, Events as _, Ledger, LedgerInfo},
     token::StellarAssetClient,
-    contract, contractimpl, Address, Env, IntoVal, Map, String,
+    Address, Env, IntoVal, Map, String,
 };
 
 use crate::error::Error;
@@ -26,38 +27,59 @@ struct ReentrantToken;
 #[contractimpl]
 impl ReentrantToken {
     pub fn configure(env: Env, vault: Address, owner: Address, goal_id: u64) {
-        env.storage().instance().set(&soroban_sdk::symbol_short!("vault"), &vault);
-        env.storage().instance().set(&soroban_sdk::symbol_short!("owner"), &owner);
-        env.storage().instance().set(&soroban_sdk::symbol_short!("goalid"), &goal_id);
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::symbol_short!("vault"), &vault);
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::symbol_short!("owner"), &owner);
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::symbol_short!("goalid"), &goal_id);
     }
 
     pub fn transfer(env: Env, _from: Address, _to: Address, _amount: i128) {
-        let vault: Address = env.storage().instance().get(&soroban_sdk::symbol_short!("vault")).unwrap();
-        let owner: Address = env.storage().instance().get(&soroban_sdk::symbol_short!("owner")).unwrap();
-        let goal_id: u64 = env.storage().instance().get(&soroban_sdk::symbol_short!("goalid")).unwrap();
-        let result = SavingsVaultClient::new(&env, &vault)
-            .try_goal_set_auto_renew(&owner, &goal_id, &true);
+        let vault: Address = env
+            .storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("vault"))
+            .unwrap();
+        let owner: Address = env
+            .storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("owner"))
+            .unwrap();
+        let goal_id: u64 = env
+            .storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("goalid"))
+            .unwrap();
+        let result =
+            SavingsVaultClient::new(&env, &vault).try_goal_set_auto_renew(&owner, &goal_id, &true);
         let rejected = matches!(result, Err(Ok(Error::ReentrantCall)));
-        env.storage().instance().set(&soroban_sdk::symbol_short!("rejected"), &rejected);
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::symbol_short!("rejected"), &rejected);
         let read_result = SavingsVaultClient::new(&env, &vault).try_goal(&goal_id);
         let read_rejected = matches!(read_result, Err(Ok(Error::ReentrantCall)));
-        env.storage().instance().set(&soroban_sdk::symbol_short!("read_rej"), &read_rejected);
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::symbol_short!("read_rej"), &read_rejected);
     }
 
     pub fn reentry_rejected(env: Env) -> bool {
-        env.storage().instance().get(&soroban_sdk::symbol_short!("rejected")).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("rejected"))
+            .unwrap_or(false)
     }
 
     pub fn readonly_reentry_rejected(env: Env) -> bool {
-        env.storage().instance().get(&soroban_sdk::symbol_short!("read_rej")).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&soroban_sdk::symbol_short!("read_rej"))
+            .unwrap_or(false)
     }
-}
-
-#[contractclient(name = "ReentrantTokenClient")]
-trait ReentrantTokenInterface {
-    fn configure(env: Env, vault: Address, owner: Address, goal_id: u64);
-    fn reentry_rejected(env: Env) -> bool;
-    fn readonly_reentry_rejected(env: Env) -> bool;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,11 +132,7 @@ fn set_ledger_time(env: &Env, timestamp: u64, sequence_number: u32) {
 }
 
 fn advance_ledger(env: &Env) {
-    set_ledger_time(
-        env,
-        env.ledger().timestamp(),
-        env.ledger().sequence() + 1,
-    );
+    set_ledger_time(env, env.ledger().timestamp(), env.ledger().sequence() + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -1036,7 +1054,10 @@ fn locked_early_withdraw_before_min_lock_period_rejected() {
     // Once the minimum period has elapsed (and before unlock), it succeeds.
     set_ledger_time(&env, now + MIN_LOCK_PERIOD, 102);
     client.locked_early_withdraw(&owner, &plan_id, &1_000_000);
-    assert_eq!(client.locked_plan(&plan_id).balance, LOCKED_AMOUNT - 1_000_000);
+    assert_eq!(
+        client.locked_plan(&plan_id).balance,
+        LOCKED_AMOUNT - 1_000_000
+    );
 }
 
 /// Once `unlock_at` has passed, the penalized early path is closed; the
@@ -1144,7 +1165,10 @@ fn locked_early_withdraw_defaults_to_no_penalty() {
         WITHDRAW,
         "with no penalty configured the owner receives the full amount",
     );
-    assert_eq!(client.locked_plan(&plan_id).balance, LOCKED_AMOUNT - WITHDRAW);
+    assert_eq!(
+        client.locked_plan(&plan_id).balance,
+        LOCKED_AMOUNT - WITHDRAW
+    );
 }
 
 /// The configured penalty rate is capped at 100% (10_000 bps).
@@ -2269,7 +2293,14 @@ fn locked_early_withdraw_emits_typed_event_with_expected_topic_and_data() {
     assert_eq!(topics, expected_topics);
     assert_eq!(
         decoded_data,
-        (plan_id, owner, WITHDRAW, PENALTY, AMOUNT - WITHDRAW, call_time)
+        (
+            plan_id,
+            owner,
+            WITHDRAW,
+            PENALTY,
+            AMOUNT - WITHDRAW,
+            call_time
+        )
     );
 }
 
@@ -2982,15 +3013,7 @@ fn group_propose_without_voting_period_rejected() {
     let recipient = Address::generate(&env);
 
     // period = 0 disables proposals.
-    let group_id = closed_group_with_voting(
-        &env,
-        &client,
-        &token,
-        &token_admin,
-        &creator,
-        &[],
-        0,
-    );
+    let group_id = closed_group_with_voting(&env, &client, &token, &token_admin, &creator, &[], 0);
 
     let result = client.try_group_propose(&creator, &group_id, &recipient, &1_000_000);
     assert_eq!(
@@ -3101,7 +3124,14 @@ fn group_propose_emits_typed_event_with_expected_topic_and_data() {
     assert_eq!(topics, expected_topics);
     assert_eq!(
         decoded_data,
-        (proposal_id, group_id, recipient, SPEND, now + VOTING_PERIOD, now)
+        (
+            proposal_id,
+            group_id,
+            recipient,
+            SPEND,
+            now + VOTING_PERIOD,
+            now
+        )
     );
 }
 
@@ -3683,6 +3713,565 @@ mod group_split_properties {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Issue #440 — Savings boost rewards
+//
+// Tests follow the same pattern as the interest tests above: set up a vault
+// with a token, open an interest account, then exercise the rewards system.
+//
+// Helper [`setup_rewards`] opens an interest account and funds the pool.
+// ---------------------------------------------------------------------------
+
+use crate::rewards::{
+    DEFAULT_ACCRUAL_PERIOD_SECONDS, TIER_1_MULTIPLIER_BPS, TIER_1_SECONDS, TIER_2_MULTIPLIER_BPS,
+    TIER_2_SECONDS, TIER_3_MULTIPLIER_BPS, TIER_3_SECONDS,
+};
+use crate::types::LoyaltyTier;
+
+/// One week in seconds (default accrual and streak period).
+const WEEK: u64 = DEFAULT_ACCRUAL_PERIOD_SECONDS;
+
+/// A simple principal for reward tests: 1 000 000 stroops.
+const REWARD_PRINCIPAL: i128 = 1_000_000;
+
+/// Pool size funded by admin: enough for all tests.
+const POOL_FUND: i128 = 10_000_000;
+
+/// Open an interest account for a fresh user and fund the reward pool.
+/// Returns `(owner, token_admin)`.
+fn setup_rewards(
+    env: &Env,
+    client: &SavingsVaultClient,
+    admin: &Address,
+    token: &Address,
+) -> (Address, Address) {
+    let token_admin = Address::generate(env);
+    let owner = Address::generate(env);
+    mint(env, token, &token_admin, &owner, REWARD_PRINCIPAL);
+    client.interest_deposit(&owner, &REWARD_PRINCIPAL);
+    // Fund the reward pool from the admin wallet.
+    mint(env, token, &token_admin, admin, POOL_FUND);
+    client.reward_fund(admin, &POOL_FUND);
+    (owner, token_admin)
+}
+
+// ---------------------------------------------------------------------------
+// Loyalty multiplier
+// ---------------------------------------------------------------------------
+
+/// Below tier 1 the multiplier is exactly 1.0× (10 000 bps).
+#[test]
+fn loyalty_multiplier_below_first_tier_is_one_x() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+
+    let config = client.reward_config();
+
+    // hold age = 0 (just deposited, no time advanced)
+    let multiplier = crate::rewards::loyalty_multiplier_bps(0, &config);
+    assert_eq!(
+        multiplier, 10_000,
+        "below tier 1 the multiplier must be 1.0× (10 000 bps)"
+    );
+
+    // One second before tier 1 still 1.0×.
+    let multiplier_before_t1 = crate::rewards::loyalty_multiplier_bps(TIER_1_SECONDS - 1, &config);
+    assert_eq!(multiplier_before_t1, 10_000);
+
+    let _ = (owner,);
+}
+
+/// At each tier boundary the multiplier steps up exactly.
+#[test]
+fn loyalty_multiplier_steps_at_tier_boundaries() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+    let config = client.reward_config();
+
+    assert_eq!(
+        crate::rewards::loyalty_multiplier_bps(TIER_1_SECONDS, &config),
+        TIER_1_MULTIPLIER_BPS,
+        "at tier-1 boundary multiplier must be TIER_1_MULTIPLIER_BPS"
+    );
+    assert_eq!(
+        crate::rewards::loyalty_multiplier_bps(TIER_2_SECONDS, &config),
+        TIER_2_MULTIPLIER_BPS,
+        "at tier-2 boundary multiplier must be TIER_2_MULTIPLIER_BPS"
+    );
+    assert_eq!(
+        crate::rewards::loyalty_multiplier_bps(TIER_3_SECONDS, &config),
+        TIER_3_MULTIPLIER_BPS,
+        "at tier-3 boundary multiplier must be TIER_3_MULTIPLIER_BPS"
+    );
+    let _ = (owner,);
+}
+
+/// The multiplier never exceeds the cap even if a very long hold is claimed.
+#[test]
+fn loyalty_multiplier_never_exceeds_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+    let config = client.reward_config();
+
+    let multiplier = crate::rewards::loyalty_multiplier_bps(u64::MAX, &config);
+    assert!(
+        multiplier <= config.loyalty_cap_bps,
+        "multiplier {} must never exceed cap {}",
+        multiplier,
+        config.loyalty_cap_bps
+    );
+    let _ = (owner,);
+}
+
+// ---------------------------------------------------------------------------
+// Streak bonus
+// ---------------------------------------------------------------------------
+
+/// Streak increments on consecutive periods.
+#[test]
+fn streak_increments_on_consecutive_periods() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+
+    // Mark the first streak period as kept, then advance one week.
+    client.reward_ping(&owner);
+    set_ledger_time(&env, WEEK, 2);
+
+    // Accrue: the first period was kept → streak becomes 1.
+    client.reward_accrue(&owner);
+    let state = client.reward_state(&owner).unwrap();
+    assert_eq!(state.streak, 1, "streak must be 1 after one kept period");
+
+    // Mark and advance a second week.
+    client.reward_ping(&owner);
+    set_ledger_time(&env, WEEK * 2, 3);
+    client.reward_accrue(&owner);
+    let state = client.reward_state(&owner).unwrap();
+    assert_eq!(
+        state.streak, 2,
+        "streak must be 2 after two consecutive periods"
+    );
+}
+
+/// A missed period resets the streak to zero.
+#[test]
+fn streak_resets_after_missed_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+
+    // Keep period 1.
+    client.reward_ping(&owner);
+    set_ledger_time(&env, WEEK, 2);
+    client.reward_accrue(&owner);
+    assert_eq!(client.reward_state(&owner).unwrap().streak, 1);
+
+    // Skip period 2 (no ping), advance two weeks.
+    set_ledger_time(&env, WEEK * 3, 4);
+    client.reward_accrue(&owner);
+    let state = client.reward_state(&owner).unwrap();
+    assert_eq!(state.streak, 0, "missed period must reset streak to 0");
+}
+
+/// The streak bonus is capped at `streak_bonus_cap_bps`.
+#[test]
+fn streak_bonus_is_capped() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+    let config = client.reward_config();
+
+    // streak so large the raw bonus would exceed the cap.
+    let large_streak = config.streak_bonus_cap_bps / config.streak_bonus_bps_per_period + 100;
+    let bonus = crate::rewards::streak_bonus_bps(large_streak, &config);
+    assert_eq!(
+        bonus, config.streak_bonus_cap_bps,
+        "streak bonus must be capped at streak_bonus_cap_bps"
+    );
+
+    let _ = (owner,);
+}
+
+// ---------------------------------------------------------------------------
+// Reward arithmetic — worked example
+// ---------------------------------------------------------------------------
+
+/// Exact reward = base × loyalty_multiplier + streak_bonus, rounded down.
+///
+/// With DEFAULT config (base_rate = 500 bps, accrual = weekly):
+///   base_per_period = 1_000_000 × 500 / 10_000 / 52  ... actually the
+///   base is computed per-period using the annual rate directly divided into
+///   one period, i.e.:
+///     base = floor(principal × base_rate_bps / 10_000)  per accrual period
+///
+/// DEFAULT_BASE_RATE_BPS = 500 (5% annual, but applied per-period flat).
+/// principal = 1_000_000
+/// base = floor(1_000_000 × 500 / 10_000) = 50_000
+/// loyalty = 1.0× (10_000 bps), below tier 1
+/// streak = 0, streak_bonus = 0
+/// reward = floor(50_000 × 10_000 / 10_000) + 0 = 50_000
+#[test]
+fn reward_arithmetic_worked_example() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+
+    // Advance exactly one accrual period, no ping (streak=0, loyalty=1.0×).
+    set_ledger_time(&env, WEEK, 2);
+    let accrued = client.reward_accrue(&owner);
+
+    // base = floor(1_000_000 × 500 / 10_000) = 50_000
+    // loyalty_part = floor(50_000 × 10_000 / 10_000) = 50_000
+    // streak_part = floor(1_000_000 × 0 / 10_000) = 0
+    // total = 50_000
+    assert_eq!(
+        accrued, 50_000,
+        "reward for one period with 1.0× loyalty and 0 streak must be 50_000"
+    );
+    assert_eq!(client.reward_state(&owner).unwrap().pending, 50_000);
+}
+
+/// Two periods without ping produce 2 × single-period reward (no streak yet).
+#[test]
+fn reward_two_periods_no_streak() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+
+    set_ledger_time(&env, WEEK * 2, 2);
+    let accrued = client.reward_accrue(&owner);
+    // 2 × 50_000 = 100_000
+    assert_eq!(accrued, 100_000);
+}
+
+// ---------------------------------------------------------------------------
+// Claim behaviour
+// ---------------------------------------------------------------------------
+
+/// Claim pays out once; a second claim pays nothing until more accrues.
+#[test]
+fn claim_pays_once_then_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+
+    set_ledger_time(&env, WEEK, 2);
+
+    let payout = client.reward_claim(&owner);
+    assert_eq!(payout, 50_000, "first claim must pay the accrued amount");
+    assert_eq!(
+        client.reward_state(&owner).unwrap().pending,
+        0,
+        "pending must be zero after a full claim"
+    );
+
+    // Second claim with no new accrual → 0.
+    let second = client.reward_claim(&owner);
+    assert_eq!(second, 0, "second claim with nothing pending must return 0");
+}
+
+/// Pool shortfall: if the pool holds less than pending, pay what's available
+/// and leave the remainder pending.
+#[test]
+fn claim_pool_shortfall_pays_partial() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+
+    // Drain pool down to a tiny amount first (use a fresh recipient).
+    let sink = Address::generate(&env);
+    mint(&env, &token, &Address::generate(&env), &admin, 1); // irrelevant; pool already funded
+
+    // Accrue two periods so pending = 100_000.
+    set_ledger_time(&env, WEEK * 2, 2);
+    client.reward_accrue(&owner);
+    assert_eq!(client.reward_state(&owner).unwrap().pending, 100_000);
+
+    // Drain most of the pool via a second user so only 30_000 remain.
+    let owner2 = Address::generate(&env);
+    let token_admin2 = Address::generate(&env);
+    mint(&env, &token, &token_admin2, &owner2, REWARD_PRINCIPAL);
+    client.interest_deposit(&owner2, &REWARD_PRINCIPAL);
+    // accrue enough for owner2 to claim POOL_FUND - 30_000 = 9_970_000
+    // We achieve this by claiming for owner (50_000 at WEEK) first, then
+    // manipulating state directly isn't possible in the test env — instead
+    // we re-fund the pool to exactly 30_000 by funding 30_000 and setting
+    // pool to known size via an extra fund then checking the partial behaviour.
+    //
+    // Simpler approach: fund a fresh pool of exactly 30_000.
+    let client2_admin = Address::generate(&env);
+    // Reset the pool balance to 30_000 by funding 30_000 minus the current balance.
+    // Current pool = POOL_FUND = 10_000_000. We can't reduce it directly, so
+    // use a separate vault for this test.
+    let env2 = Env::default();
+    env2.mock_all_auths();
+    let (client2, admin2, token2) = setup_with_token(&env2);
+    let token_admin_b = Address::generate(&env2);
+    let owner_b = Address::generate(&env2);
+    mint(&env2, &token2, &token_admin_b, &owner_b, REWARD_PRINCIPAL);
+    client2.interest_deposit(&owner_b, &REWARD_PRINCIPAL);
+
+    // Fund pool with only 30_000 — less than one accrual period (50_000).
+    mint(&env2, &token2, &token_admin_b, &admin2, 30_000i128);
+    client2.reward_fund(&admin2, &30_000i128);
+    assert_eq!(client2.reward_pool_balance(), 30_000);
+
+    // Advance one week so pending = 50_000, pool = 30_000.
+    set_ledger_time(&env2, WEEK, 2);
+    client2.reward_accrue(&owner_b);
+    assert_eq!(client2.reward_state(&owner_b).unwrap().pending, 50_000);
+
+    let payout = client2.reward_claim(&owner_b);
+    assert_eq!(payout, 30_000, "shortfall: must pay what the pool holds");
+    assert_eq!(
+        client2.reward_pool_balance(),
+        0,
+        "pool must be exactly 0 after shortfall payout"
+    );
+    assert_eq!(
+        client2.reward_state(&owner_b).unwrap().pending,
+        20_000,
+        "remainder must stay in pending after shortfall"
+    );
+
+    let _ = (sink, owner2, client2_admin);
+}
+
+/// Pool at exactly zero pays nothing (no error, just 0).
+#[test]
+fn claim_empty_pool_returns_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    // Don't fund the pool — it starts at 0.
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+    mint(&env, &token, &token_admin, &owner, REWARD_PRINCIPAL);
+    client.interest_deposit(&owner, &REWARD_PRINCIPAL);
+    // No reward_fund call.
+
+    set_ledger_time(&env, WEEK, 2);
+    let payout = client.reward_claim(&owner);
+    assert_eq!(payout, 0, "empty pool must return 0, not error");
+    assert_eq!(
+        client.reward_state(&owner).unwrap().pending,
+        50_000,
+        "pending must still reflect the accrued amount"
+    );
+    let _ = (admin,);
+}
+
+// ---------------------------------------------------------------------------
+// No position → no reward
+// ---------------------------------------------------------------------------
+
+/// A user without an interest account earns nothing.
+#[test]
+fn no_interest_account_earns_nothing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let (_, _) = setup_rewards(&env, &client, &admin, &token);
+    let stranger = Address::generate(&env);
+
+    set_ledger_time(&env, WEEK, 2);
+    // accrue returns Ok(0) for a user with no interest account.
+    let accrued = client.reward_accrue(&stranger);
+    assert_eq!(accrued, 0);
+    assert!(
+        client.reward_state(&stranger).is_none(),
+        "a user with no interest account must have no reward state"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Config setters — admin guard and validation
+// ---------------------------------------------------------------------------
+
+/// Non-admin cannot call reward_set_config.
+#[test]
+fn reward_set_config_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _token) = setup_with_token(&env);
+    let attacker = Address::generate(&env);
+    let config = client.reward_config();
+
+    let result = client.try_reward_set_config(&attacker, &config);
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "non-admin must be rejected by reward_set_config"
+    );
+}
+
+/// Non-admin cannot call reward_fund.
+#[test]
+fn reward_fund_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, token) = setup_with_token(&env);
+    let attacker = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    mint(&env, &token, &token_admin, &attacker, 1_000);
+
+    let result = client.try_reward_fund(&attacker, &1_000i128);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+/// reward_set_config rejects zero accrual period.
+#[test]
+fn reward_set_config_rejects_zero_accrual_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _token) = setup_with_token(&env);
+    let mut config = client.reward_config();
+    config.accrual_period_seconds = 0;
+
+    let result = client.try_reward_set_config(&admin, &config);
+    assert_eq!(result, Err(Ok(Error::InvalidRewardConfig)));
+}
+
+/// reward_set_config rejects loyalty_cap_bps below 1.0× (10_000).
+#[test]
+fn reward_set_config_rejects_cap_below_one_x() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _token) = setup_with_token(&env);
+    let mut config = client.reward_config();
+    config.loyalty_cap_bps = 9_999;
+
+    let result = client.try_reward_set_config(&admin, &config);
+    assert_eq!(result, Err(Ok(Error::InvalidRewardConfig)));
+}
+
+/// reward_set_config rejects unsorted loyalty tiers.
+#[test]
+fn reward_set_config_rejects_unsorted_tiers() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _token) = setup_with_token(&env);
+
+    let mut tiers: soroban_sdk::Vec<LoyaltyTier> = soroban_sdk::Vec::new(&env);
+    tiers.push_back(LoyaltyTier {
+        min_seconds: TIER_2_SECONDS,
+        multiplier_bps: 11_000,
+    });
+    tiers.push_back(LoyaltyTier {
+        min_seconds: TIER_1_SECONDS,
+        multiplier_bps: 10_500,
+    }); // out of order
+
+    let mut config = client.reward_config();
+    config.loyalty_tiers = tiers;
+
+    let result = client.try_reward_set_config(&admin, &config);
+    assert_eq!(result, Err(Ok(Error::InvalidRewardConfig)));
+}
+
+/// reward_set_config emits an event on a valid update.
+#[test]
+fn reward_set_config_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, _token) = setup_with_token(&env);
+    let config = client.reward_config();
+    let events_before = env.events().all().len();
+
+    client.reward_set_config(&admin, &config);
+
+    let events_after = env.events().all().len();
+    assert_eq!(
+        events_after - events_before,
+        1,
+        "reward_set_config must emit exactly one event"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Existing deposit/withdraw/exchange-rate tests still pass
+// (covered by the existing test functions above — this section just confirms
+// the rewards hooks inside interest::deposit/withdraw don't break anything)
+// ---------------------------------------------------------------------------
+
+/// interest_deposit and interest_withdraw still work correctly after the
+/// note_touch hook is wired in.
+#[test]
+fn interest_deposit_withdraw_unaffected_by_rewards_hook() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+
+    let owner = setup_interest(
+        &env,
+        &client,
+        &admin,
+        &token,
+        &token_admin,
+        1200,
+        CompoundFrequency::Monthly,
+    );
+
+    set_ledger_time(&env, MONTH, 2);
+    assert_eq!(client.interest_accrued(&owner), 10_000);
+    assert_eq!(client.interest_claim(&owner), 10_000);
+
+    // Withdraw should still work (not regressed by note_touch).
+    client.interest_withdraw(&owner, &500_000);
+    let account = client.interest_account(&owner);
+    assert_eq!(account.principal, 510_000); // 1_010_000 - 500_000
+}
+
+/// Reward ping requires an existing interest account.
+#[test]
+fn reward_ping_without_interest_account_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _admin, _token) = setup_with_token(&env);
+    let stranger = Address::generate(&env);
+
+    let result = client.try_reward_ping(&stranger);
+    assert_eq!(result, Err(Ok(Error::NotFound)));
+}
+
+/// reward_fund emits a `reward_funded` event.
+#[test]
+fn reward_fund_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    mint(&env, &token, &token_admin, &admin, 1_000);
+    let events_before = env.events().all().len();
+
+    client.reward_fund(&admin, &1_000i128);
+
+    let events_after = env.events().all().len();
+    assert!(
+        events_after > events_before,
+        "reward_fund must emit an event"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Upstream #491 — Token reentrancy guard
+// ---------------------------------------------------------------------------
 
 #[test]
 fn token_callback_cannot_reenter_vault_mutation() {

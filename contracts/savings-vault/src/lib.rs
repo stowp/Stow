@@ -24,6 +24,7 @@ mod group;
 mod group_split;
 mod interest;
 mod locked;
+pub mod rewards;
 mod storage;
 mod types;
 mod voting;
@@ -36,6 +37,7 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map, String};
 use crate::error::Error;
 use crate::types::{
     CompoundFrequency, FlexibleAccount, Goal, Group, InterestAccount, LockedPlan, Proposal,
+    RewardState, RewardsConfig,
 };
 
 #[contract]
@@ -144,15 +146,30 @@ impl SavingsVault {
     }
 
     // --- locked ------------------------------------------------------------
-    pub fn locked_create(env: Env, owner: Address, amount: i128, unlock_at: u64) -> Result<u64, Error> {
+    pub fn locked_create(
+        env: Env,
+        owner: Address,
+        amount: i128,
+        unlock_at: u64,
+    ) -> Result<u64, Error> {
         locked::create(&env, owner, amount, unlock_at)
     }
 
-    pub fn locked_top_up(env: Env, owner: Address, plan_id: u64, amount: i128) -> Result<(), Error> {
+    pub fn locked_top_up(
+        env: Env,
+        owner: Address,
+        plan_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         locked::top_up(&env, owner, plan_id, amount)
     }
 
-    pub fn locked_withdraw(env: Env, owner: Address, plan_id: u64, amount: i128) -> Result<(), Error> {
+    pub fn locked_withdraw(
+        env: Env,
+        owner: Address,
+        plan_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         locked::withdraw(&env, owner, plan_id, amount)
     }
 
@@ -172,11 +189,21 @@ impl SavingsVault {
     }
 
     // --- goal --------------------------------------------------------------
-    pub fn goal_create(env: Env, owner: Address, name: String, target_amount: i128) -> Result<u64, Error> {
+    pub fn goal_create(
+        env: Env,
+        owner: Address,
+        name: String,
+        target_amount: i128,
+    ) -> Result<u64, Error> {
         goal::create(&env, owner, name, target_amount)
     }
 
-    pub fn goal_contribute(env: Env, from: Address, goal_id: u64, amount: i128) -> Result<(), Error> {
+    pub fn goal_contribute(
+        env: Env,
+        from: Address,
+        goal_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         goal::contribute(&env, from, goal_id, amount)
     }
 
@@ -212,7 +239,12 @@ impl SavingsVault {
         group::join(&env, member, group_id)
     }
 
-    pub fn group_contribute(env: Env, member: Address, group_id: u64, amount: i128) -> Result<(), Error> {
+    pub fn group_contribute(
+        env: Env,
+        member: Address,
+        group_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         group::contribute(&env, member, group_id, amount)
     }
 
@@ -229,7 +261,12 @@ impl SavingsVault {
     }
 
     // --- group split -------------------------------------------------------
-    pub fn group_set_shares(env: Env, creator: Address, group_id: u64, shares_bps: Map<Address, u32>) -> Result<(), Error> {
+    pub fn group_set_shares(
+        env: Env,
+        creator: Address,
+        group_id: u64,
+        shares_bps: Map<Address, u32>,
+    ) -> Result<(), Error> {
         group_split::set_shares(&env, creator, group_id, shares_bps)
     }
 
@@ -334,5 +371,63 @@ impl SavingsVault {
     /// Preview the interest accrued but not yet credited to `owner`.
     pub fn interest_accrued(env: Env, owner: Address) -> Result<i128, Error> {
         interest::accrued(&env, owner)
+    }
+
+    // --- rewards -----------------------------------------------------------
+
+    /// Admin-only: configure the rewards system.
+    ///
+    /// Validates: `base_rate_bps ≤ 10_000`, both period values non-zero,
+    /// `loyalty_cap_bps ≥ 10_000`, tiers sorted ascending, ≤ 4 tiers.
+    pub fn reward_set_config(
+        env: Env,
+        caller: Address,
+        config: RewardsConfig,
+    ) -> Result<(), Error> {
+        rewards::set_config(&env, caller, config)
+    }
+
+    /// Read the current rewards configuration.
+    pub fn reward_config(env: Env) -> RewardsConfig {
+        rewards::get_config(&env)
+    }
+
+    /// Admin-only: transfer `amount` tokens from `caller` into the reward pool.
+    pub fn reward_fund(env: Env, caller: Address, amount: i128) -> Result<(), Error> {
+        rewards::fund_pool(&env, caller, amount)
+    }
+
+    /// Current balance of the reward pool, in token stroops.
+    pub fn reward_pool_balance(env: Env) -> i128 {
+        rewards::pool_balance(&env)
+    }
+
+    /// Settle all elapsed accrual periods into the caller's pending balance.
+    /// Permissionless — anyone may trigger accrual for any user.
+    /// Returns the amount newly accrued.
+    pub fn reward_accrue(env: Env, owner: Address) -> Result<i128, Error> {
+        rewards::accrue(&env, owner)
+    }
+
+    /// Claim pending rewards. Settles first, then pays `min(pending, pool)`
+    /// to `owner`. Returns the amount paid out. Requires `owner.require_auth`.
+    pub fn reward_claim(env: Env, owner: Address) -> Result<i128, Error> {
+        rewards::claim(&env, owner)
+    }
+
+    /// Mark the caller active in the current streak period without accruing.
+    /// Requires an existing interest account.
+    pub fn reward_ping(env: Env, owner: Address) -> Result<(), Error> {
+        rewards::ping(&env, owner)
+    }
+
+    /// Read the reward state for `owner`. Returns `None` if never initialised.
+    pub fn reward_state(env: Env, owner: Address) -> Option<RewardState> {
+        rewards::get_reward_state(&env, owner)
+    }
+
+    /// Preview how much would be accrued right now (read-only, no storage writes).
+    pub fn reward_accrued_preview(env: Env, owner: Address) -> Result<i128, Error> {
+        rewards::accrued_preview(&env, owner)
     }
 }

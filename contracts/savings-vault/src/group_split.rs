@@ -17,6 +17,7 @@ pub const TOTAL_BPS: u32 = 10_000;
 /// Each member's raw share is `pool * bps / TOTAL_BPS` (floor division). The
 /// leftover from rounding down (always `>= 0`) is assigned entirely to
 /// `remainder_recipient` so the sum of payouts always equals `pool` exactly.
+#[allow(dead_code)]
 pub fn compute_payouts(
     env: &Env,
     shares_bps: &Map<Address, u32>,
@@ -64,7 +65,11 @@ pub fn set_shares(
     creator.require_auth();
 
     let key = DataKey::Group(group_id);
-    let mut group: Group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut group: Group = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     if group.creator != creator {
@@ -96,7 +101,12 @@ pub fn set_shares(
 
     env.events().publish(
         (TOPIC_GROUP_SHARES_SET, creator.clone(), group_id),
-        (group_id, creator, group.shares_bps.clone(), env.ledger().timestamp()),
+        (
+            group_id,
+            creator,
+            group.shares_bps.clone(),
+            env.ledger().timestamp(),
+        ),
     );
 
     Ok(())
@@ -137,7 +147,11 @@ pub fn settle(env: &Env, caller: Address, group_id: u64) -> Result<(), Error> {
     caller.require_auth();
 
     let key = DataKey::Group(group_id);
-    let mut group: Group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut group: Group = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     // Shares can only be set on a closed group, so we check `open` first.

@@ -66,8 +66,10 @@ pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
     env.storage().persistent().set(&key, &account);
     storage::extend_persistent_ttl(env, &key);
 
-    env.events()
-        .publish((TOPIC_DEPOSIT, from.clone()), (from, amount, new_balance, now));
+    env.events().publish(
+        (TOPIC_DEPOSIT, from.clone()),
+        (from, amount, new_balance, now),
+    );
 
     Ok(())
 }
@@ -96,8 +98,11 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
     }
 
     let key = DataKey::Flexible(owner.clone());
-    let mut account: FlexibleAccount =
-        env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut account: FlexibleAccount = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     if amount > account.balance {
@@ -125,7 +130,11 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
 /// Read the caller's flexible account (or `NotFound`).
 pub fn get_account(env: &Env, owner: Address) -> Result<FlexibleAccount, Error> {
     let key = DataKey::Flexible(owner);
-    let account = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let account = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
     Ok(account)
 }

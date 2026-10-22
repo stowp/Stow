@@ -90,6 +90,10 @@ pub const TOPIC_GROUP_VOTE_CAST: &str = "group_vote_cast";
 /// outcome (`passed`) and the amount actually paid out (`spent`, 0 on a fail).
 pub const TOPIC_GROUP_PROPOSAL_EXECUTED: &str = "group_proposal_executed";
 
+// --- upgrade -----------------------------------------------------------
+/// Emitted at the end of a successful `upgrade` call.
+pub const TOPIC_UPGRADED: &str = "upgraded";
+
 // --- interest ----------------------------------------------------------
 /// Emitted at the end of a successful `set_interest_rate` call.
 pub const TOPIC_INTEREST_RATE_SET: &str = "interest_rate_set";
@@ -102,3 +106,15 @@ pub const TOPIC_INTEREST_WITHDRAW: &str = "interest_withdraw";
 /// Emitted at the end of a successful `interest_claim` call, recording the
 /// interest credited to principal.
 pub const TOPIC_INTEREST_CLAIMED: &str = "interest_claimed";
+
+// --- rewards -----------------------------------------------------------
+/// Emitted when the admin funds the reward pool.
+pub const TOPIC_REWARD_FUNDED: &str = "reward_funded";
+/// Emitted when reward config is updated by the admin.
+pub const TOPIC_REWARD_CONFIG_SET: &str = "reward_config_set";
+/// Emitted when rewards are accrued for a user.
+pub const TOPIC_REWARD_ACCRUED: &str = "reward_accrued";
+/// Emitted when a user claims rewards from the pool.
+pub const TOPIC_REWARD_CLAIMED: &str = "reward_claimed";
+/// Emitted when a user's streak is updated.
+pub const TOPIC_STREAK_UPDATED: &str = "streak_updated";

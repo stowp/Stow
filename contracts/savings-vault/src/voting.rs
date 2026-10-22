@@ -41,7 +41,11 @@ pub fn set_voting_period(
     creator.require_auth();
 
     let key = DataKey::Group(group_id);
-    let mut group: Group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut group: Group = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     if group.creator != creator {
@@ -86,7 +90,11 @@ pub fn propose(
     }
 
     let key = DataKey::Group(group_id);
-    let group: Group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let group: Group = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     if !group.members.iter().any(|m| m == proposer) {
@@ -104,7 +112,9 @@ pub fn propose(
 
     let id = next_proposal_id(env);
     let now = env.ledger().timestamp();
-    let voting_ends_at = now.checked_add(group.voting_period).ok_or(Error::Overflow)?;
+    let voting_ends_at = now
+        .checked_add(group.voting_period)
+        .ok_or(Error::Overflow)?;
 
     let proposal = Proposal {
         id,
@@ -143,11 +153,19 @@ pub fn vote(env: &Env, voter: Address, proposal_id: u64, approve: bool) -> Resul
     voter.require_auth();
 
     let pkey = DataKey::Proposal(proposal_id);
-    let mut proposal: Proposal = env.storage().persistent().get(&pkey).ok_or(Error::NotFound)?;
+    let mut proposal: Proposal = env
+        .storage()
+        .persistent()
+        .get(&pkey)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &pkey);
 
     let gkey = DataKey::Group(proposal.group_id);
-    let group: Group = env.storage().persistent().get(&gkey).ok_or(Error::NotFound)?;
+    let group: Group = env
+        .storage()
+        .persistent()
+        .get(&gkey)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &gkey);
 
     if !group.members.iter().any(|m| m == voter) {
@@ -204,7 +222,11 @@ pub fn execute(env: &Env, caller: Address, proposal_id: u64) -> Result<bool, Err
     caller.require_auth();
 
     let pkey = DataKey::Proposal(proposal_id);
-    let mut proposal: Proposal = env.storage().persistent().get(&pkey).ok_or(Error::NotFound)?;
+    let mut proposal: Proposal = env
+        .storage()
+        .persistent()
+        .get(&pkey)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &pkey);
 
     if proposal.executed {
@@ -217,7 +239,11 @@ pub fn execute(env: &Env, caller: Address, proposal_id: u64) -> Result<bool, Err
     }
 
     let gkey = DataKey::Group(proposal.group_id);
-    let mut group: Group = env.storage().persistent().get(&gkey).ok_or(Error::NotFound)?;
+    let mut group: Group = env
+        .storage()
+        .persistent()
+        .get(&gkey)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &gkey);
 
     let member_count = group.members.len();
@@ -264,7 +290,11 @@ pub fn execute(env: &Env, caller: Address, proposal_id: u64) -> Result<bool, Err
 /// Read a proposal by id.
 pub fn get_proposal(env: &Env, proposal_id: u64) -> Result<Proposal, Error> {
     let key = DataKey::Proposal(proposal_id);
-    let proposal = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let proposal = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
     Ok(proposal)
 }

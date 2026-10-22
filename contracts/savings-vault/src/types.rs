@@ -1,5 +1,64 @@
 use soroban_sdk::{contracttype, Address, Map, String, Vec};
 
+// ---------------------------------------------------------------------------
+// Rewards (new for #440)
+// ---------------------------------------------------------------------------
+
+/// Loyalty-multiplier tier: holds a position for at least `min_seconds` to
+/// earn `multiplier_bps` (10_000 = 1.0×).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoyaltyTier {
+    /// Minimum continuous hold time in seconds to qualify.
+    pub min_seconds: u64,
+    /// Reward multiplier in basis points (10_000 = 1.0×).
+    pub multiplier_bps: u32,
+}
+
+/// Admin-configurable rewards parameters.
+///
+/// Stored as a single instance-storage entry under `DataKey::RewardsConfig`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RewardsConfig {
+    /// Annual base reward rate in basis points.
+    pub base_rate_bps: u32,
+    /// How many seconds make one accrual period (e.g. 604_800 = 1 week). Must be > 0.
+    pub accrual_period_seconds: u64,
+    /// Loyalty tiers (sorted ascending by `min_seconds`). Up to 4 tiers.
+    pub loyalty_tiers: Vec<LoyaltyTier>,
+    /// Maximum loyalty multiplier in basis points (≥ 10_000).
+    pub loyalty_cap_bps: u32,
+    /// Extra reward per consecutive kept streak period, in bps of principal.
+    pub streak_bonus_bps_per_period: u32,
+    /// Maximum streak bonus in basis points.
+    pub streak_bonus_cap_bps: u32,
+    /// Length of one streak period in seconds. Must be > 0.
+    pub streak_period_seconds: u64,
+}
+
+/// Per-user reward tracking. Stored as a persistent entry under
+/// `DataKey::RewardState(owner)`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RewardState {
+    pub owner: Address,
+    /// Rewards accrued but not yet claimed, in token stroops.
+    pub pending: i128,
+    /// Ledger timestamp of the last accrual.
+    pub last_accrued_at: u64,
+    /// Number of consecutive streak periods kept so far.
+    pub streak: u32,
+    /// Ledger timestamp of the start of the current streak period window.
+    pub streak_period_start: u64,
+    /// Whether the current streak period has already been satisfied.
+    pub streak_period_kept: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Existing types
+// ---------------------------------------------------------------------------
+
 /// A flexible savings account: deposit and withdraw any time.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -25,7 +84,7 @@ pub struct LockedPlan {
 
 /// A goal-based savings target with automated milestone tracking.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Goal {
     pub id: u64,
     pub owner: Address,
@@ -142,7 +201,7 @@ impl CompoundFrequency {
 /// deposit/withdraw. This keeps accrual gas-cheap regardless of how much
 /// time has elapsed.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InterestAccount {
     pub owner: Address,
     /// Compounded principal: deposits plus interest credited so far.
@@ -299,6 +358,20 @@ pub enum DataKey {
     GoalContributions(u64),
     /// Ledger sequence of the most recent contribution to a goal.
     GoalLastContributionLedger(u64),
-    /// Set while an external token transfer is in progress.
+    /// Set while an external token transfer is in progress (reentrancy guard).
     TokenTransferActive,
+
+    // --- Rewards (new for #440) ---
+    /// Admin-configured rewards parameters.
+    ///
+    /// Durability: instance — single config record, read on every accrual.
+    RewardsConfig,
+    /// Total token stroops currently available in the reward pool.
+    ///
+    /// Durability: instance — single counter, updated on every fund/claim.
+    RewardPoolBalance,
+    /// Per-user reward tracking (`RewardState` by owner).
+    ///
+    /// Durability: persistent — one entry per user.
+    RewardState(Address),
 }

@@ -25,9 +25,9 @@
 //!   account drained to zero and abandoned) will eventually hit its
 //!   minimum persistent TTL and become eligible for archival by the
 //!   network; reading an archived entry then requires a `restore` before
-//! the next `get`. [`extend_persistent_ttl`] is called after every read
-//! and write of a `Flexible`, `InterestAccount`, `Locked`, `Goal`, or
-//! `Group` record so a record touched within the bump window never expires.
+//!   the next `get`. [`extend_persistent_ttl`] is called after every read
+//!   and write of a `Flexible`, `InterestAccount`, `Locked`, `Goal`, or
+//!   `Group` record so a record touched within the bump window never expires.
 //!
 //! ## TTL policy
 //!

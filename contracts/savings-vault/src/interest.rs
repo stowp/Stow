@@ -39,6 +39,7 @@ use crate::events::{
     TOPIC_INTEREST_CLAIMED, TOPIC_INTEREST_DEPOSIT, TOPIC_INTEREST_FREQUENCY_SET,
     TOPIC_INTEREST_RATE_SET, TOPIC_INTEREST_WITHDRAW,
 };
+use crate::rewards;
 use crate::storage::{self, extend_instance_ttl};
 use crate::types::{CompoundFrequency, DataKey, InterestAccount};
 
@@ -172,13 +173,19 @@ pub fn deposit(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
     account.rate_bps = rate_bps(env);
     account.frequency = frequency(env);
 
-    account.principal = account.principal.checked_add(amount).ok_or(Error::Overflow)?;
+    account.principal = account
+        .principal
+        .checked_add(amount)
+        .ok_or(Error::Overflow)?;
     account.updated_at = now;
 
     storage::transfer_in(env, &owner, amount)?;
 
     env.storage().persistent().set(&key, &account);
     storage::extend_persistent_ttl(env, &key);
+
+    // Notify reward streak tracker that the user is active.
+    rewards::note_touch(env, &owner);
 
     env.events().publish(
         (TOPIC_INTEREST_DEPOSIT, owner.clone()),
@@ -206,8 +213,11 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
     }
 
     let key = DataKey::InterestAccount(owner.clone());
-    let mut account: InterestAccount =
-        env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut account: InterestAccount = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     let now = env.ledger().timestamp();
@@ -219,7 +229,10 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
         return Err(Error::InsufficientBalance);
     }
 
-    let new_principal = account.principal.checked_sub(amount).ok_or(Error::Overflow)?;
+    let new_principal = account
+        .principal
+        .checked_sub(amount)
+        .ok_or(Error::Overflow)?;
 
     storage::transfer_out(env, &owner, amount)?;
 
@@ -227,6 +240,9 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
     account.updated_at = now;
     env.storage().persistent().set(&key, &account);
     storage::extend_persistent_ttl(env, &key);
+
+    // Notify reward streak tracker that the user is active.
+    rewards::note_touch(env, &owner);
 
     env.events().publish(
         (TOPIC_INTEREST_WITHDRAW, owner.clone()),
@@ -250,8 +266,11 @@ pub fn claim(env: &Env, owner: Address) -> Result<i128, Error> {
     owner.require_auth();
 
     let key = DataKey::InterestAccount(owner.clone());
-    let mut account: InterestAccount =
-        env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut account: InterestAccount = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     let now = env.ledger().timestamp();
@@ -274,7 +293,11 @@ pub fn claim(env: &Env, owner: Address) -> Result<i128, Error> {
 /// Read an interest account (or `NotFound`).
 pub fn get_account(env: &Env, owner: Address) -> Result<InterestAccount, Error> {
     let key = DataKey::InterestAccount(owner);
-    let account = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let account = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
     Ok(account)
 }
@@ -285,8 +308,11 @@ pub fn get_account(env: &Env, owner: Address) -> Result<InterestAccount, Error> 
 /// Errors: `NotFound` if the account does not exist, `Overflow`.
 pub fn accrued(env: &Env, owner: Address) -> Result<i128, Error> {
     let key = DataKey::InterestAccount(owner);
-    let account: InterestAccount =
-        env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let account: InterestAccount = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     let now = env.ledger().timestamp();
@@ -303,7 +329,9 @@ pub fn accrued(env: &Env, owner: Address) -> Result<i128, Error> {
         account.frequency.periods_per_year(),
         periods,
     )?;
-    compounded.checked_sub(account.principal).ok_or(Error::Overflow)
+    compounded
+        .checked_sub(account.principal)
+        .ok_or(Error::Overflow)
 }
 
 /// Compound `account.principal` over the whole periods elapsed since
@@ -361,7 +389,9 @@ fn period_factor(env: &Env, rate_bps: u32, periods_per_year: u32) -> Result<i128
     let denominator = (TOTAL_BPS as i128)
         .checked_mul(periods_per_year as i128)
         .ok_or(Error::Overflow)?;
-    let numerator = denominator.checked_add(rate_bps as i128).ok_or(Error::Overflow)?;
+    let numerator = denominator
+        .checked_add(rate_bps as i128)
+        .ok_or(Error::Overflow)?;
     mul_div_floor(env, SCALE, numerator, denominator)
 }
 

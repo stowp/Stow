@@ -292,7 +292,11 @@ pub fn set_auto_renew(
 
 pub fn get_goal(env: &Env, goal_id: u64) -> Result<Goal, Error> {
     let key = DataKey::Goal(goal_id);
-    let goal = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let goal = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
     Ok(goal)
 }
@@ -317,6 +321,7 @@ pub fn get_contributions(env: &Env, goal_id: u64) -> Result<Map<Address, i128>, 
 }
 
 /// Helper to allocate the next goal id.
+#[allow(dead_code)]
 fn next_goal_id(env: &Env) -> u64 {
     let key = DataKey::NextGoalId;
     let current: u64 = env.storage().instance().get(&key).unwrap_or(0);
