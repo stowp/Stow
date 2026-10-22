@@ -3,7 +3,7 @@ use soroban_sdk::contracterror;
 /// Contract-wide error codes.
 ///
 /// Keep these stable and append-only — clients and the indexer map to them.
-/// 
+///
 /// Error codes are organized by category for maintainability:
 /// - 1-9: Lifecycle and initialization
 /// - 10-19: Authentication and authorization
@@ -31,12 +31,6 @@ pub enum Error {
     // --- Authentication & Authorization (10-19) ---
     /// Caller is not authorized for this action.
     Unauthorized = 10,
-    /// The provided admin address is invalid.
-    InvalidAdmin = 11,
-    /// The action requires admin privileges.
-    AdminOnly = 12,
-    /// The caller has been banned from this contract.
-    CallerBanned = 13,
 
     // --- Generic Validation (20-29) ---
     /// A provided amount was zero or negative.
@@ -57,24 +51,10 @@ pub enum Error {
     StillLocked = 30,
     /// The provided unlock time is in the past.
     InvalidUnlockTime = 31,
-    /// Lock duration exceeds maximum allowed.
-    LockDurationTooLong = 32,
-    /// Lock duration is below minimum allowed.
-    LockDurationTooShort = 33,
-    /// Early unlock is not permitted for this lock type.
-    EarlyUnlockNotAllowed = 34,
 
     // --- Goal Savings (40-49) ---
     /// The goal target has not yet been reached.
     GoalNotReached = 40,
-    /// Invalid goal target amount.
-    InvalidGoalTarget = 41,
-    /// Goal deadline has passed.
-    GoalDeadlinePassed = 42,
-    /// Goal has already been completed.
-    GoalAlreadyCompleted = 43,
-    /// Goal milestone configuration is invalid.
-    InvalidMilestone = 44,
 
     // --- Group Savings (50-59) ---
     /// The group is full or the round is closed to new members.
@@ -174,13 +154,10 @@ impl Error {
             Error::AlreadyInitialized => "Contract has already been initialized",
             Error::NotInitialized => "Contract must be initialized before this call",
             Error::InvalidInitialization => "Invalid initialization parameters provided",
-            
+
             // Authentication & Authorization
             Error::Unauthorized => "Caller is not authorized for this action",
-            Error::InvalidAdmin => "The provided admin address is invalid",
-            Error::AdminOnly => "The action requires admin privileges",
-            Error::CallerBanned => "The caller has been banned from this contract",
-            
+
             // Generic Validation
             Error::InvalidAmount => "A provided amount was zero or negative",
             Error::NotFound => "The referenced resource does not exist",
@@ -188,21 +165,14 @@ impl Error {
             Error::InvalidAddress => "The provided address is invalid",
             Error::ConflictingState => "The operation conflicts with existing state",
             Error::InvalidParameters => "Invalid parameter combination provided",
-            
+
             // Locked Savings
             Error::StillLocked => "Funds are still locked; unlock time not reached",
             Error::InvalidUnlockTime => "The provided unlock time is in the past",
-            Error::LockDurationTooLong => "Lock duration exceeds maximum allowed",
-            Error::LockDurationTooShort => "Lock duration is below minimum allowed",
-            Error::EarlyUnlockNotAllowed => "Early unlock is not permitted for this lock type",
-            
+
             // Goal Savings
             Error::GoalNotReached => "The goal target has not yet been reached",
-            Error::InvalidGoalTarget => "Invalid goal target amount",
-            Error::GoalDeadlinePassed => "Goal deadline has passed",
-            Error::GoalAlreadyCompleted => "Goal has already been completed",
-            Error::InvalidMilestone => "Goal milestone configuration is invalid",
-            
+
             // Group Savings
             Error::GroupClosed => "The group is full or closed to new members",
             Error::InvalidShares => "Member shares do not sum to expected total",
@@ -213,39 +183,39 @@ impl Error {
             Error::MemberAlreadyExists => "Member already exists in group",
             Error::AlreadyVoted => "Caller has already voted on this proposal",
             Error::ProposalAlreadyExecuted => "The proposal has already been executed",
-            
+
             // Arithmetic & Limits
             Error::Overflow => "Arithmetic operation would overflow or underflow",
             Error::DepositCapExceeded => "Deposit would exceed per-account cap",
             Error::WithdrawExceedsBalance => "Withdrawal exceeds available balance",
             Error::DivisionByZero => "Division by zero attempted",
             Error::NegativeResult => "Result is negative when positive was required",
-            
+
             // Admin Lifecycle
             Error::Paused => "The contract is paused",
             Error::NotPaused => "The contract must be paused for this operation",
             Error::EmergencyShutdown => "Emergency shutdown has been activated",
             Error::UpgradeFailed => "Contract upgrade failed",
-            
+
             // Policy Limits
             Error::DepositBelowMinimum => "Deposit amount is below minimum",
             Error::WithdrawBelowMinimum => "Withdrawal amount is below minimum",
             Error::DailyLimitExceeded => "Daily transaction limit exceeded",
             Error::RateLimitExceeded => "Rate limit exceeded for this operation",
             Error::ConcurrentOperationLimitExceeded => "Too many concurrent operations",
-            
+
             // Time-based Operations
             Error::CooldownActive => "Cooldown period is still active",
             Error::InvalidTimestamp => "The provided timestamp is invalid",
             Error::OperationExpired => "Operation has expired",
             Error::TimeWindowNotOpen => "Time window for operation has not opened yet",
-            
+
             // Token Operations
             Error::TransferFailed => "Token transfer failed",
             Error::InvalidToken => "Invalid token contract address",
             Error::InsufficientAllowance => "Token allowance is insufficient",
             Error::TokenCallFailed => "Token contract call failed",
-            
+
             // Storage & State
             Error::StorageFailed => "Storage operation failed",
             Error::DataCorruption => "Data corruption detected",
@@ -260,74 +230,62 @@ impl Error {
     /// Useful for metrics and categorized error handling.
     pub fn category(&self) -> &'static str {
         match self {
-            Error::AlreadyInitialized 
-            | Error::NotInitialized 
-            | Error::InvalidInitialization => "Lifecycle",
-            
-            Error::Unauthorized 
-            | Error::InvalidAdmin 
-            | Error::AdminOnly 
-            | Error::CallerBanned => "Authorization",
-            
-            Error::InvalidAmount 
-            | Error::NotFound 
-            | Error::InsufficientBalance 
-            | Error::InvalidAddress 
-            | Error::ConflictingState 
+            Error::AlreadyInitialized | Error::NotInitialized | Error::InvalidInitialization => {
+                "Lifecycle"
+            }
+
+            Error::Unauthorized => "Authorization",
+
+            Error::InvalidAmount
+            | Error::NotFound
+            | Error::InsufficientBalance
+            | Error::InvalidAddress
+            | Error::ConflictingState
             | Error::InvalidParameters => "Validation",
-            
-            Error::StillLocked 
-            | Error::InvalidUnlockTime 
-            | Error::LockDurationTooLong 
-            | Error::LockDurationTooShort 
-            | Error::EarlyUnlockNotAllowed => "LockedSavings",
-            
-            Error::GoalNotReached 
-            | Error::InvalidGoalTarget 
-            | Error::GoalDeadlinePassed 
-            | Error::GoalAlreadyCompleted 
-            | Error::InvalidMilestone => "GoalSavings",
-            
-            Error::GroupClosed 
-            | Error::InvalidShares 
-            | Error::NotAMember 
-            | Error::GroupFull 
-            | Error::InvalidPayoutSchedule 
-            | Error::InsufficientGroupFunds 
-            | Error::MemberAlreadyExists 
-            | Error::AlreadyVoted 
+
+            Error::StillLocked | Error::InvalidUnlockTime => "LockedSavings",
+
+            Error::GoalNotReached => "GoalSavings",
+
+            Error::GroupClosed
+            | Error::InvalidShares
+            | Error::NotAMember
+            | Error::GroupFull
+            | Error::InvalidPayoutSchedule
+            | Error::InsufficientGroupFunds
+            | Error::MemberAlreadyExists
+            | Error::AlreadyVoted
             | Error::ProposalAlreadyExecuted => "GroupSavings",
-            
-            Error::Overflow 
-            | Error::DepositCapExceeded 
-            | Error::WithdrawExceedsBalance 
-            | Error::DivisionByZero 
+
+            Error::Overflow
+            | Error::DepositCapExceeded
+            | Error::WithdrawExceedsBalance
+            | Error::DivisionByZero
             | Error::NegativeResult => "Arithmetic",
-            
-            Error::Paused 
-            | Error::NotPaused 
-            | Error::EmergencyShutdown 
-            | Error::UpgradeFailed => "AdminLifecycle",
-            
-            Error::DepositBelowMinimum 
-            | Error::WithdrawBelowMinimum 
-            | Error::DailyLimitExceeded 
-            | Error::RateLimitExceeded 
+
+            Error::Paused | Error::NotPaused | Error::EmergencyShutdown | Error::UpgradeFailed => {
+                "AdminLifecycle"
+            }
+
+            Error::DepositBelowMinimum
+            | Error::WithdrawBelowMinimum
+            | Error::DailyLimitExceeded
+            | Error::RateLimitExceeded
             | Error::ConcurrentOperationLimitExceeded => "PolicyLimits",
-            
-            Error::CooldownActive 
-            | Error::InvalidTimestamp 
-            | Error::OperationExpired 
+
+            Error::CooldownActive
+            | Error::InvalidTimestamp
+            | Error::OperationExpired
             | Error::TimeWindowNotOpen => "TimeBasedOperations",
-            
-            Error::TransferFailed 
-            | Error::InvalidToken 
-            | Error::InsufficientAllowance 
+
+            Error::TransferFailed
+            | Error::InvalidToken
+            | Error::InsufficientAllowance
             | Error::TokenCallFailed => "TokenOperations",
-            
-            Error::StorageFailed 
-            | Error::DataCorruption 
-            | Error::StorageLimitExceeded 
+
+            Error::StorageFailed
+            | Error::DataCorruption
+            | Error::StorageLimitExceeded
             | Error::InvalidStateTransition => "StorageAndState",
 
             Error::SameLedger | Error::ReentrantCall => "Security",
@@ -351,9 +309,7 @@ impl Error {
     pub fn is_fatal(&self) -> bool {
         matches!(
             self,
-            Error::DataCorruption 
-            | Error::EmergencyShutdown 
-            | Error::UpgradeFailed
+            Error::DataCorruption | Error::EmergencyShutdown | Error::UpgradeFailed
         )
     }
 }

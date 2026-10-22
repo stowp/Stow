@@ -21,6 +21,8 @@ pub const EVENT_SCHEMA_VERSION: u32 = 1;
 pub const TOPIC_INIT: &str = "init";
 /// Emitted at the end of a successful `set_admin` call.
 pub const TOPIC_ADMIN_SET: &str = "admin_set";
+/// Emitted at the end of a successful `upgrade` call.
+pub const TOPIC_UPGRADED: &str = "upgraded";
 
 // --- flexible ------------------------------------------------------------
 /// Emitted at the end of a successful `deposit` call.
@@ -102,3 +104,22 @@ pub const TOPIC_INTEREST_WITHDRAW: &str = "interest_withdraw";
 /// Emitted at the end of a successful `interest_claim` call, recording the
 /// interest credited to principal.
 pub const TOPIC_INTEREST_CLAIMED: &str = "interest_claimed";
+
+// --- delegation ----------------------------------------------------------
+/// Emitted at the end of a successful `delegate_savings` call when a new
+/// delegation is created.
+///
+/// Topics: `(Symbol("delegation_granted"), owner: Address, delegate: Address)`
+/// Data:   `(owner: Address, delegate: Address, level: PermissionLevel, expires_at: u64, timestamp: u64)`
+pub const TOPIC_DELEGATION_GRANTED: &str = "delegation_granted";
+/// Emitted at the end of a successful `update_delegation` call when an
+/// existing delegation's permission level or expiry is changed.
+///
+/// Topics: `(Symbol("delegation_updated"), owner: Address, delegate: Address)`
+/// Data:   `(owner: Address, delegate: Address, level: PermissionLevel, expires_at: u64, timestamp: u64)`
+pub const TOPIC_DELEGATION_UPDATED: &str = "delegation_updated";
+/// Emitted at the end of a successful `revoke_delegation` call.
+///
+/// Topics: `(Symbol("delegation_revoked"), owner: Address, delegate: Address)`
+/// Data:   `(owner: Address, delegate: Address, timestamp: u64)`
+pub const TOPIC_DELEGATION_REVOKED: &str = "delegation_revoked";

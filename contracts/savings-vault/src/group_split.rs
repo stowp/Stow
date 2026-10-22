@@ -64,7 +64,11 @@ pub fn set_shares(
     creator.require_auth();
 
     let key = DataKey::Group(group_id);
-    let mut group: Group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut group: Group = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     if group.creator != creator {
@@ -96,7 +100,12 @@ pub fn set_shares(
 
     env.events().publish(
         (TOPIC_GROUP_SHARES_SET, creator.clone(), group_id),
-        (group_id, creator, group.shares_bps.clone(), env.ledger().timestamp()),
+        (
+            group_id,
+            creator,
+            group.shares_bps.clone(),
+            env.ledger().timestamp(),
+        ),
     );
 
     Ok(())
@@ -137,7 +146,11 @@ pub fn settle(env: &Env, caller: Address, group_id: u64) -> Result<(), Error> {
     caller.require_auth();
 
     let key = DataKey::Group(group_id);
-    let mut group: Group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let mut group: Group = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
 
     // Shares can only be set on a closed group, so we check `open` first.

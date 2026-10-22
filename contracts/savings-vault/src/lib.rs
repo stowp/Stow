@@ -16,6 +16,7 @@
 //! and a `TODO(issue)` describing the work. Each stub is one contributor issue.
 
 mod admin;
+mod delegation;
 mod error;
 mod events;
 mod flexible;
@@ -35,7 +36,8 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map, String};
 
 use crate::error::Error;
 use crate::types::{
-    CompoundFrequency, FlexibleAccount, Goal, Group, InterestAccount, LockedPlan, Proposal,
+    CompoundFrequency, Delegation, FlexibleAccount, Goal, Group, InterestAccount, LockedPlan,
+    PermissionLevel, Proposal,
 };
 
 #[contract]
@@ -144,15 +146,30 @@ impl SavingsVault {
     }
 
     // --- locked ------------------------------------------------------------
-    pub fn locked_create(env: Env, owner: Address, amount: i128, unlock_at: u64) -> Result<u64, Error> {
+    pub fn locked_create(
+        env: Env,
+        owner: Address,
+        amount: i128,
+        unlock_at: u64,
+    ) -> Result<u64, Error> {
         locked::create(&env, owner, amount, unlock_at)
     }
 
-    pub fn locked_top_up(env: Env, owner: Address, plan_id: u64, amount: i128) -> Result<(), Error> {
+    pub fn locked_top_up(
+        env: Env,
+        owner: Address,
+        plan_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         locked::top_up(&env, owner, plan_id, amount)
     }
 
-    pub fn locked_withdraw(env: Env, owner: Address, plan_id: u64, amount: i128) -> Result<(), Error> {
+    pub fn locked_withdraw(
+        env: Env,
+        owner: Address,
+        plan_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         locked::withdraw(&env, owner, plan_id, amount)
     }
 
@@ -172,11 +189,21 @@ impl SavingsVault {
     }
 
     // --- goal --------------------------------------------------------------
-    pub fn goal_create(env: Env, owner: Address, name: String, target_amount: i128) -> Result<u64, Error> {
+    pub fn goal_create(
+        env: Env,
+        owner: Address,
+        name: String,
+        target_amount: i128,
+    ) -> Result<u64, Error> {
         goal::create(&env, owner, name, target_amount)
     }
 
-    pub fn goal_contribute(env: Env, from: Address, goal_id: u64, amount: i128) -> Result<(), Error> {
+    pub fn goal_contribute(
+        env: Env,
+        from: Address,
+        goal_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         goal::contribute(&env, from, goal_id, amount)
     }
 
@@ -212,7 +239,12 @@ impl SavingsVault {
         group::join(&env, member, group_id)
     }
 
-    pub fn group_contribute(env: Env, member: Address, group_id: u64, amount: i128) -> Result<(), Error> {
+    pub fn group_contribute(
+        env: Env,
+        member: Address,
+        group_id: u64,
+        amount: i128,
+    ) -> Result<(), Error> {
         group::contribute(&env, member, group_id, amount)
     }
 
@@ -229,7 +261,12 @@ impl SavingsVault {
     }
 
     // --- group split -------------------------------------------------------
-    pub fn group_set_shares(env: Env, creator: Address, group_id: u64, shares_bps: Map<Address, u32>) -> Result<(), Error> {
+    pub fn group_set_shares(
+        env: Env,
+        creator: Address,
+        group_id: u64,
+        shares_bps: Map<Address, u32>,
+    ) -> Result<(), Error> {
         group_split::set_shares(&env, creator, group_id, shares_bps)
     }
 
@@ -334,5 +371,70 @@ impl SavingsVault {
     /// Preview the interest accrued but not yet credited to `owner`.
     pub fn interest_accrued(env: Env, owner: Address) -> Result<i128, Error> {
         interest::accrued(&env, owner)
+    }
+
+    // --- delegation --------------------------------------------------------
+    /// Grant a delegate permission to manage `owner`'s savings at `level`,
+    /// optionally expiring at `expires_at` (a ledger timestamp; `None` means
+    /// no expiry).  Owner-only.  See [`delegation::delegate_savings`].
+    pub fn delegate_savings(
+        env: Env,
+        owner: Address,
+        delegate: Address,
+        level: PermissionLevel,
+        expires_at: Option<u64>,
+    ) -> Result<(), Error> {
+        delegation::delegate_savings(&env, owner, delegate, level, expires_at)
+    }
+
+    /// Update an existing delegation's permission level and/or expiry.
+    /// Owner-only.  See [`delegation::update_delegation`].
+    pub fn update_delegation(
+        env: Env,
+        owner: Address,
+        delegate: Address,
+        level: PermissionLevel,
+        expires_at: Option<u64>,
+    ) -> Result<(), Error> {
+        delegation::update_delegation(&env, owner, delegate, level, expires_at)
+    }
+
+    /// Revoke a delegation.  The delegate immediately loses access.
+    /// Owner-only.  See [`delegation::revoke_delegation`].
+    pub fn revoke_delegation(env: Env, owner: Address, delegate: Address) -> Result<(), Error> {
+        delegation::revoke_delegation(&env, owner, delegate)
+    }
+
+    /// Read a delegation by `(owner, delegate)` pair (or `DelegationNotFound`).
+    pub fn get_delegation(
+        env: Env,
+        owner: Address,
+        delegate: Address,
+    ) -> Result<Delegation, Error> {
+        delegation::get_delegation(&env, owner, delegate)
+    }
+
+    /// Deposit into `owner`'s flexible account on the delegate's behalf.
+    /// The delegate authenticates; funds come from the delegate's wallet.
+    /// Requires at least `Deposit` permission.
+    pub fn delegated_deposit(
+        env: Env,
+        delegate: Address,
+        owner: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        delegation::delegated_deposit(&env, delegate, owner, amount)
+    }
+
+    /// Withdraw from `owner`'s flexible account.  The delegate authenticates,
+    /// but funds are always transferred to the **owner's** wallet, never the
+    /// delegate's.  Requires `Full` permission.
+    pub fn delegated_withdraw(
+        env: Env,
+        delegate: Address,
+        owner: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        delegation::delegated_withdraw(&env, delegate, owner, amount)
     }
 }

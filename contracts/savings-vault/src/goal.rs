@@ -190,10 +190,8 @@ pub fn claim(env: &Env, owner: Address, goal_id: u64) -> Result<(), Error> {
     }
 
     let contribution_ledger_key = DataKey::GoalLastContributionLedger(goal_id);
-    let last_contribution_ledger: Option<u32> = env
-        .storage()
-        .persistent()
-        .get(&contribution_ledger_key);
+    let last_contribution_ledger: Option<u32> =
+        env.storage().persistent().get(&contribution_ledger_key);
     if last_contribution_ledger.is_some_and(|sequence| env.ledger().sequence() <= sequence) {
         return Err(Error::SameLedger);
     }
@@ -229,9 +227,7 @@ pub fn claim(env: &Env, owner: Address, goal_id: u64) -> Result<(), Error> {
         goal.saved_amount = 0;
         goal.reached_at = None;
         env.storage().persistent().remove(&contributions_key);
-        env.storage()
-            .persistent()
-            .remove(&contribution_ledger_key);
+        env.storage().persistent().remove(&contribution_ledger_key);
         env.storage().persistent().set(&key, &goal);
         storage::extend_persistent_ttl(env, &key);
 
@@ -244,9 +240,7 @@ pub fn claim(env: &Env, owner: Address, goal_id: u64) -> Result<(), Error> {
         // zero-balance record behind.
         env.storage().persistent().remove(&key);
         env.storage().persistent().remove(&contributions_key);
-        env.storage()
-            .persistent()
-            .remove(&contribution_ledger_key);
+        env.storage().persistent().remove(&contribution_ledger_key);
     }
 
     Ok(())
@@ -292,7 +286,11 @@ pub fn set_auto_renew(
 
 pub fn get_goal(env: &Env, goal_id: u64) -> Result<Goal, Error> {
     let key = DataKey::Goal(goal_id);
-    let goal = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let goal = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
     Ok(goal)
 }

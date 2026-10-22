@@ -172,7 +172,12 @@ pub fn transfer_out(env: &Env, to: &Address, amount: i128) -> Result<(), Error> 
 
 pub(crate) fn begin_token_transfer(env: &Env) -> Result<(), Error> {
     let key = DataKey::TokenTransferActive;
-    if env.storage().instance().get::<_, bool>(&key).unwrap_or(false) {
+    if env
+        .storage()
+        .instance()
+        .get::<_, bool>(&key)
+        .unwrap_or(false)
+    {
         return Err(Error::ReentrantCall);
     }
     env.storage().instance().set(&key, &true);

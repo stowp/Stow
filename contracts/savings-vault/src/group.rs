@@ -253,7 +253,11 @@ pub fn payout_equal(env: &Env, caller: Address, group_id: u64) -> Result<(), Err
 
 pub fn get_group(env: &Env, group_id: u64) -> Result<Group, Error> {
     let key = DataKey::Group(group_id);
-    let group = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let group = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     storage::extend_persistent_ttl(env, &key);
     Ok(group)
 }
