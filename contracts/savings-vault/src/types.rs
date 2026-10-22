@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Map, String, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Map, String, Vec};
 
 /// A flexible savings account: deposit and withdraw any time.
 #[contracttype]
@@ -161,6 +161,87 @@ pub struct InterestAccount {
     pub updated_at: u64,
 }
 
+/// The set of admin actions that must pass through the timelock.
+///
+/// Each variant carries exactly the parameters that the underlying admin
+/// function needs, so `execute_action` can apply it without any extra
+/// context.
+///
+/// ## Which actions are timelocked?
+///
+/// | Action                      | Timelocked? | Rationale                                   |
+/// |-----------------------------|-------------|---------------------------------------------|
+/// | `set_admin`                 | ✅          | Admin rotation is irrevocable without delay |
+/// | `upgrade`                   | ✅          | Wasm swap can change all contract logic     |
+/// | `set_deposit_cap`           | ✅          | Affects user funds, policy change           |
+/// | `set_min_deposit`           | ✅          | Policy change with user impact              |
+/// | `set_early_withdraw_penalty`| ✅          | Fee change impacts existing lock holders    |
+/// | `set_penalty_recipient`     | ✅          | Treasury/fee routing change                 |
+/// | `set_min_lock_period`       | ✅          | Affects withdrawal rights of existing locks |
+/// | `set_interest_rate`         | ✅          | Rate change affects accrual for all users   |
+/// | `set_interest_frequency`    | ✅          | Compounding model change                    |
+/// | `set_timelock_delay`        | ✅          | Changing the delay must itself be delayed   |
+/// | `set_paused`                | ❌ immediate| Emergency circuit-breaker — a delay defeats|
+///                                              the purpose of an emergency pause.          |
+#[contracttype]
+#[derive(Clone)]
+pub enum TimelockAction {
+    /// Rotate the admin key. Equivalent to `set_admin(new_admin)`.
+    SetAdmin(Address),
+    /// Swap the contract Wasm. Equivalent to `upgrade(new_wasm_hash)`.
+    Upgrade(BytesN<32>),
+    /// Change the per-account deposit cap (in stroops). `0` = unlimited.
+    SetDepositCap(i128),
+    /// Change the minimum deposit (in stroops). `0` = no minimum.
+    SetMinDeposit(i128),
+    /// Change the early-withdrawal penalty, in basis points.
+    SetEarlyWithdrawPenaltyBps(u32),
+    /// Change the address that receives early-withdrawal penalties.
+    SetPenaltyRecipient(Address),
+    /// Change the minimum lock period before early withdrawal, in seconds.
+    SetMinLockPeriod(u64),
+    /// Change the annual interest rate, in basis points.
+    SetInterestRate(u32),
+    /// Change the compounding frequency for interest accounts.
+    SetInterestFrequency(CompoundFrequency),
+    /// Change the timelock delay itself, in seconds.
+    SetTimelockDelay(u64),
+}
+
+/// Lifecycle state of a queued action.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ActionStatus {
+    /// Waiting to reach the ETA (or already past it but not yet executed).
+    Pending,
+    /// Successfully applied by `execute_action`.
+    Executed,
+    /// Cancelled by the admin before execution.
+    Cancelled,
+}
+
+/// A pending (or completed) timelock entry.
+///
+/// Stored under [`DataKey::QueuedAction(id)`] in persistent storage.
+#[contracttype]
+#[derive(Clone)]
+pub struct QueuedAction {
+    /// Unique monotonic id allocated by [`DataKey::NextTimelockId`].
+    pub id: u64,
+    /// The action payload to apply at execution time.
+    pub action: TimelockAction,
+    /// Ledger timestamp before which `execute_action` is rejected
+    /// (`Error::TimelockNotReady`).
+    pub eta: u64,
+    /// Ledger timestamp after which `execute_action` is rejected
+    /// (`Error::TimelockExpired`). Set to `eta + TIMELOCK_GRACE_PERIOD`.
+    pub expires_at: u64,
+    /// Current lifecycle state.
+    pub status: ActionStatus,
+    /// Ledger timestamp when this entry was queued.
+    pub queued_at: u64,
+}
+
 /// Storage keys. One variant per logical record family.
 ///
 /// See `storage` module docs for the full storage model: durability
@@ -301,4 +382,19 @@ pub enum DataKey {
     GoalLastContributionLedger(u64),
     /// Set while an external token transfer is in progress.
     TokenTransferActive,
+    /// Admin-configured delay (in seconds) that queued actions must wait
+    /// before execution. Absent means the default [`crate::timelock::DEFAULT_TIMELOCK_DELAY`].
+    ///
+    /// Durability: instance — read on every `queue_action` and `execute_action`. TTL:
+    /// bumped alongside the rest of instance storage.
+    TimelockDelay,
+    /// Monotonic counter for queued-action ids.
+    ///
+    /// Durability: instance. TTL: bumped alongside the rest of instance storage.
+    NextTimelockId,
+    /// [`QueuedAction`] by id.
+    ///
+    /// Durability: persistent — one entry per queued action, unbounded key space.
+    /// TTL: bumped on every read/write via `extend_persistent_ttl`.
+    QueuedAction(u64),
 }

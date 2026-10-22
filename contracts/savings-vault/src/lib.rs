@@ -25,6 +25,7 @@ mod group_split;
 mod interest;
 mod locked;
 mod storage;
+mod timelock;
 mod types;
 mod voting;
 
@@ -36,6 +37,7 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map, String};
 use crate::error::Error;
 use crate::types::{
     CompoundFrequency, FlexibleAccount, Goal, Group, InterestAccount, LockedPlan, Proposal,
+    QueuedAction, TimelockAction,
 };
 
 #[contract]
@@ -334,5 +336,45 @@ impl SavingsVault {
     /// Preview the interest accrued but not yet credited to `owner`.
     pub fn interest_accrued(env: Env, owner: Address) -> Result<i128, Error> {
         interest::accrued(&env, owner)
+    }
+
+    // --- timelock ----------------------------------------------------------
+
+    /// Queue a critical admin action that will be executable after the
+    /// configured timelock delay has elapsed.
+    ///
+    /// Returns the unique action id. Admin-only.
+    pub fn queue_action(env: Env, action: TimelockAction) -> Result<u64, Error> {
+        timelock::queue_action(&env, action)
+    }
+
+    /// Execute a previously queued action whose ETA has been reached.
+    ///
+    /// Fails with `TimelockNotReady` before the ETA, `TimelockExpired` after
+    /// the grace period, `TimelockAlreadyExecuted` / `TimelockCancelled` for
+    /// non-Pending actions. Admin-only.
+    pub fn execute_action(env: Env, id: u64) -> Result<(), Error> {
+        timelock::execute_action(&env, id)
+    }
+
+    /// Cancel a queued action that has not yet been executed.
+    ///
+    /// Cancelled actions can never be executed. Admin-only.
+    pub fn cancel_action(env: Env, id: u64) -> Result<(), Error> {
+        timelock::cancel_action(&env, id)
+    }
+
+    /// Read the state of a queued action by id.
+    pub fn get_queued_action(env: Env, id: u64) -> Result<QueuedAction, Error> {
+        timelock::get_queued_action(&env, id)
+    }
+
+    /// The currently configured timelock delay, in seconds.
+    ///
+    /// Defaults to [`timelock::DEFAULT_TIMELOCK_DELAY`] (24 h) until the
+    /// admin sets a different value via `queue_action` + `execute_action` with
+    /// `TimelockAction::SetTimelockDelay`.
+    pub fn timelock_delay(env: Env) -> u64 {
+        timelock::get_delay(&env)
     }
 }

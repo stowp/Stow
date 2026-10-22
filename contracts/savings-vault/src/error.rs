@@ -163,6 +163,21 @@ pub enum Error {
     SameLedger = 114,
     /// A token callback attempted a nested token transfer.
     ReentrantCall = 115,
+
+    // --- Timelock (120-129) ---
+    /// The queued action's ETA has not yet been reached.
+    TimelockNotReady = 120,
+    /// The queued action has passed its grace-period expiry and can no longer
+    /// be executed.
+    TimelockExpired = 121,
+    /// The referenced queued action has already been executed.
+    TimelockAlreadyExecuted = 122,
+    /// The referenced queued action has been cancelled and cannot be executed.
+    TimelockCancelled = 123,
+    /// The requested timelock delay is below the minimum allowed.
+    TimelockDelayTooShort = 124,
+    /// The requested timelock delay exceeds the maximum allowed.
+    TimelockDelayTooLong = 125,
 }
 
 impl Error {
@@ -253,6 +268,14 @@ impl Error {
             Error::InvalidStateTransition => "Invalid state transition",
             Error::SameLedger => "Operation is not allowed in the funding ledger",
             Error::ReentrantCall => "Reentrant token transfer rejected",
+
+            // Timelock
+            Error::TimelockNotReady => "Queued action ETA has not been reached yet",
+            Error::TimelockExpired => "Queued action has passed its grace-period expiry",
+            Error::TimelockAlreadyExecuted => "Queued action has already been executed",
+            Error::TimelockCancelled => "Queued action has been cancelled",
+            Error::TimelockDelayTooShort => "Timelock delay is below the minimum allowed",
+            Error::TimelockDelayTooLong => "Timelock delay exceeds the maximum allowed",
         }
     }
 
@@ -331,6 +354,13 @@ impl Error {
             | Error::InvalidStateTransition => "StorageAndState",
 
             Error::SameLedger | Error::ReentrantCall => "Security",
+
+            Error::TimelockNotReady
+            | Error::TimelockExpired
+            | Error::TimelockAlreadyExecuted
+            | Error::TimelockCancelled
+            | Error::TimelockDelayTooShort
+            | Error::TimelockDelayTooLong => "Timelock",
         }
     }
 

@@ -83,6 +83,24 @@ pub fn set_rate(env: &Env, caller: Address, rate_bps: u32) -> Result<(), Error> 
     Ok(())
 }
 
+/// Internal variant of [`set_rate`] used by `timelock::execute_action`.
+///
+/// Auth has already been verified by the timelock; this function skips
+/// `require_auth` and writes the rate directly.
+pub(crate) fn set_rate_internal(env: &Env, admin: Address, rate_bps: u32) -> Result<(), Error> {
+    if rate_bps > MAX_INTEREST_BPS {
+        return Err(Error::InvalidParameters);
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::InterestRateBps, &rate_bps);
+    env.events().publish(
+        (TOPIC_INTEREST_RATE_SET,),
+        (admin, rate_bps, env.ledger().timestamp()),
+    );
+    Ok(())
+}
+
 /// The annual interest rate, in basis points. `0` (the default) means no
 /// interest accrues.
 pub fn rate_bps(env: &Env) -> u32 {
@@ -120,6 +138,25 @@ pub fn set_frequency(
         (caller, frequency, env.ledger().timestamp()),
     );
 
+    Ok(())
+}
+
+/// Internal variant of [`set_frequency`] used by `timelock::execute_action`.
+///
+/// Auth has already been verified by the timelock; this function skips
+/// `require_auth` and writes the frequency directly.
+pub(crate) fn set_frequency_internal(
+    env: &Env,
+    admin: Address,
+    frequency: CompoundFrequency,
+) -> Result<(), Error> {
+    env.storage()
+        .instance()
+        .set(&DataKey::InterestFrequency, &frequency);
+    env.events().publish(
+        (TOPIC_INTEREST_FREQUENCY_SET,),
+        (admin, frequency, env.ledger().timestamp()),
+    );
     Ok(())
 }
 
