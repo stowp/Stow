@@ -19,6 +19,7 @@ mod admin;
 mod delegation;
 mod error;
 mod events;
+mod fees;
 mod flexible;
 mod goal;
 mod group;
