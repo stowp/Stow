@@ -28,10 +28,38 @@ use crate::types::{DataKey, FlexibleAccount};
 /// has not been initialized, `DepositBelowMinimum`, `DepositCapExceeded`,
 /// `Overflow` if the resulting balance would not fit in `i128`.
 pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
+    deposit_with_transfer(env, from, amount, storage::transfer_in, true)
+}
+
+/// Deposit from an owner who previously authorized the vault through SEP-41
+/// allowance. Used by permissionless recurring-deposit execution.
+pub(crate) fn deposit_from_allowance(
+    env: &Env,
+    from: Address,
+    amount: i128,
+) -> Result<(), Error> {
+    deposit_with_transfer(
+        env,
+        from,
+        amount,
+        storage::transfer_in_from_allowance,
+        false,
+    )
+}
+
+fn deposit_with_transfer(
+    env: &Env,
+    from: Address,
+    amount: i128,
+    transfer: fn(&Env, &Address, i128) -> Result<(), Error>,
+    require_owner_auth: bool,
+) -> Result<(), Error> {
     extend_instance_ttl(env);
     admin::require_not_paused(env)?;
     admin::require_not_emergency(env)?;
-    from.require_auth();
+    if require_owner_auth {
+        from.require_auth();
+    }
 
     if amount <= 0 {
         return Err(Error::InvalidAmount);
@@ -62,7 +90,7 @@ pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
         return Err(Error::DepositCapExceeded);
     }
 
-    storage::transfer_in(env, &from, amount)?;
+    transfer(env, &from, amount)?;
 
     let premium = insurance::collect_premium(env, amount)?;
     let new_balance = new_balance.checked_sub(premium).ok_or(Error::Overflow)?;

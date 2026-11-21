@@ -110,4 +110,8 @@ pub enum Error {
     InvalidRewardConfig = 121,
     /// No reward has accrued yet (nothing to claim).
     NoRewardAccrued = 122,
+
+    // --- Group withdrawal approvals ---
+    /// A group withdrawal request was already rejected or executed.
+    WithdrawalRequestClosed = 123,
 }

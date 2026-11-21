@@ -25,10 +25,12 @@ frontend) can build against it without reading the stub bodies.
 | `admin` | `initialize`, `token`, `set_admin`, `set_deposit_cap`, `set_min_deposit`, `set_early_withdraw_penalty_bps`, `set_penalty_recipient`, `set_min_lock_period`, `upgrade` | init guard, token config, admin rotation, deposit cap, minimum deposit, early-withdrawal penalty + recipient + minimum lock period, contract upgrade |
 | `storage` | TTL + accessors | storage helpers, TTL tuning, id allocation |
 | `flexible` | `deposit`, `withdraw`, `get_account` | one issue each |
+| `recurring` | `setup`, `execute`, `cancel`, `get` | recurring wallet deposits |
 | `locked` | `create`, `top_up`, `withdraw`, `early_withdraw`, `plan` | create + time-lock enforcement, top-up, withdraw, early partial withdrawal |
 | `goal` | `create`, `contribute`, `claim`, `set_auto_renew`, `goal` | create, contribute + milestone, claim, auto-renewal |
 | `group` | `create`, `join`, `contribute`, `close`, `payout_equal` | one issue each |
 | `group_split` | `set_shares`, `settle` | shares validation, weighted settlement |
+| `multisig` | `request_withdrawal`, `approve_withdrawal`, `reject_withdrawal` | threshold-approved group withdrawals |
 | `voting` | `set_voting_period`, `propose`, `vote`, `execute`, `proposal` | proposal creation, voting period, execution |
 | `interest` | `set_rate`, `rate_bps`, `set_frequency`, `frequency`, `deposit`, `withdraw`, `claim`, `get_account`, `accrued` | rate + frequency config, deposit/withdraw, lazy compound accrual |
 | `events` | typed publishers | one issue per event topic |
@@ -43,10 +45,13 @@ src/
   storage.rs     # storage/TTL helpers
   admin.rs       # init + admin
   flexible.rs    # flexible savings
+  recurring.rs   # permissionless execution of user-authorized deposits
   locked.rs      # locked savings
   goal.rs        # goal-based savings
   group.rs       # group pools
   group_split.rs # weighted group settlement
+  multisig.rs    # threshold-approved group withdrawals
+  multisig.rs    # threshold-approved group withdrawals
   voting.rs      # group spending proposals + voting
   interest.rs    # interest-bearing accounts + compound accrual
   events.rs      # event topic registry (see "Event schema" below)
@@ -331,6 +336,40 @@ stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
   -- get_account --owner GALICE...ADDRESS
 ```
 
+### Recurring deposits
+
+Recurring schedules pull from the owner's wallet into their flexible savings
+account. Before execution, the owner must approve the vault as a SEP-41 token
+spender for enough tokens and a suitable allowance expiration. Anyone can
+trigger a due execution; a failed execution does not advance the schedule.
+Monthly intervals are fixed at 30 days.
+
+#### `setup_recurring(owner: Address, amount: i128, frequency: RecurringFrequency) -> Result<u64, Error>`
+- **Auth:** `owner`.
+- **Errors:** `InvalidAmount`, `Overflow` if the next timestamp overflows,
+  `Paused`, or `EmergencyShutdown`.
+- **Returns:** the first execution timestamp, one interval after setup.
+- **Events:** none.
+
+`RecurringFrequency` is `Daily`, `Weekly`, or `Monthly`.
+
+#### `execute_recurring(owner: Address) -> Result<(), Error>`
+- **Auth:** none; permissionless.
+- **Errors:** `NotFound` if no schedule exists, `TimeWindowNotOpen` if it is
+  not due yet, `InsufficientBalance` if the wallet balance is too low, plus
+  ordinary deposit, token allowance, pause, and emergency errors.
+- Advances the next execution time by one interval from the execution time.
+- **Events:** [`RecurringDepositExecuted`](#recurringdepositexecuted).
+
+#### `cancel_recurring(owner: Address) -> Result<(), Error>`
+- **Auth:** `owner`.
+- **Errors:** `NotFound` if no schedule exists.
+- **Events:** none.
+
+#### `recurring_deposit(owner: Address) -> Option<RecurringDeposit>`
+- **Auth:** none (read-only).
+- **Events:** none.
+
 ### Locked savings — deterministic on-chain time locks
 
 #### `locked_create(owner: Address, amount: i128, unlock_at: u64) -> Result<u64, Error>`
@@ -521,6 +560,36 @@ stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
 stellar contract invoke --id $CONTRACT_ID --source alice --network testnet \
   -- group --group_id 1
 ```
+
+### Multi-signature group withdrawals
+
+These requests are available for closed groups, which freezes membership and
+therefore the request's approver set. The requester is not counted as an
+approver automatically. Thresholds must be between 1 and the number of group
+members. Requests expire within 30 days; reaching the threshold transfers the
+requested amount immediately to the saved recipient.
+
+#### `request_withdrawal(requester: Address, group_id: u64, recipient: Address, amount: i128, threshold: u32, expires_at: u64) -> Result<u64, Error>`
+- **Auth:** `requester`, who must be a group member.
+- **Errors:** `NotFound`, `NotAMember`, `GroupClosed` if the group is still
+  open, `InvalidAmount`, `InsufficientGroupFunds`, `InvalidParameters` for
+  an invalid threshold or expiration, and `Overflow`.
+
+#### `approve_withdrawal(approver: Address, request_id: u64) -> Result<(), Error>`
+- **Auth:** `approver`, who must be in the frozen group membership.
+- Adds one approval. Duplicate approvals return `AlreadyVoted`; an expired
+  request returns `OperationExpired`.
+- Reaching the threshold pays the recipient and decreases the group balance.
+
+#### `reject_withdrawal(rejector: Address, request_id: u64) -> Result<(), Error>`
+- **Auth:** `rejector`, who must be in the frozen group membership.
+- Any group member can veto a pending request. Rejected requests cannot be
+  approved.
+
+#### `withdrawal_request(request_id: u64) -> Result<GroupWithdrawalRequest, Error>`
+- **Auth:** none (read-only).
+- Returns the request, its recorded approvals, threshold,
+  expiry, and execution/rejection status.
 
 ### Group-split savings — pool settled by agreed shares
 
@@ -1039,6 +1108,53 @@ Emitted once per member during a single `group_payout_equal` call.
 | `amount` | `i128` | Amount transferred to this member. |
 | `timestamp` | `u64` | Ledger timestamp of the call. |
 
+#### `group_withdrawal_requested`
+Topics: `(Symbol("group_withdrawal_requested"), requester: Address, id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `u64` | New withdrawal request id. |
+| `group_id` | `u64` | Group whose balance is requested. |
+| `requester` | `Address` | Group member who created the request. |
+| `recipient` | `Address` | Address to receive funds if approved. |
+| `amount` | `i128` | Amount requested. |
+| `threshold` | `u32` | Required distinct member approvals. |
+| `expires_at` | `u64` | Expiration timestamp. |
+| `timestamp` | `u64` | Request creation time. |
+
+#### `group_withdrawal_approved`
+Topics: `(Symbol("group_withdrawal_approved"), approver: Address, request_id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u64` | Withdrawal request id. |
+| `group_id` | `u64` | Group id. |
+| `approver` | `Address` | Member who approved. |
+| `approval_count` | `u32` | Count after this approval. |
+| `threshold` | `u32` | Required approval count. |
+| `timestamp` | `u64` | Approval time. |
+
+#### `group_withdrawal_rejected`
+Topics: `(Symbol("group_withdrawal_rejected"), rejector: Address, request_id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u64` | Rejected withdrawal request id. |
+| `group_id` | `u64` | Group id. |
+| `rejector` | `Address` | Member who rejected the request. |
+| `timestamp` | `u64` | Rejection time. |
+
+#### `group_withdrawal_executed`
+Topics: `(Symbol("group_withdrawal_executed"), request_id: u64)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `request_id` | `u64` | Executed withdrawal request id. |
+| `group_id` | `u64` | Group id. |
+| `recipient` | `Address` | Payout recipient. |
+| `amount` | `i128` | Amount paid. |
+| `timestamp` | `u64` | Execution time. |
+
 #### `group_shares_set`
 Topics: `(Symbol("group_shares_set"), creator: Address, id: u64)`
 
@@ -1151,3 +1267,14 @@ Topics: `(Symbol("interest_claimed"), owner: Address)`
 | `credited` | `i128` | Interest credited into the principal this call (`0` between periods). |
 | `principal` | `i128` | Resulting principal after crediting. |
 | `timestamp` | `u64` | Ledger timestamp of the call. |
+
+#### `RecurringDepositExecuted`
+Topics: `(Symbol("RecurringDepositExecuted"), owner: Address)`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `owner` | `Address` | Wallet from which the recurring amount was deposited. |
+| `amount` | `i128` | Amount transferred into flexible savings. |
+| `frequency` | `RecurringFrequency` | Schedule frequency. |
+| `next_execution` | `u64` | Timestamp for the next eligible execution. |
+| `timestamp` | `u64` | Ledger timestamp of this execution. |

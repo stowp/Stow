@@ -77,6 +77,14 @@ pub const TOPIC_GROUP_CONTRIBUTION: &str = "group_contribution";
 pub const TOPIC_GROUP_CLOSED: &str = "group_closed";
 /// Emitted once per member during a successful `group_payout_equal` call.
 pub const TOPIC_GROUP_PAYOUT: &str = "group_payout";
+/// Emitted when a multi-signature group withdrawal is requested.
+pub const TOPIC_GROUP_WITHDRAWAL_REQUESTED: &str = "group_withdrawal_requested";
+/// Emitted when a group member approves a pending withdrawal.
+pub const TOPIC_GROUP_WITHDRAWAL_APPROVED: &str = "group_withdrawal_approved";
+/// Emitted when a member rejects a pending group withdrawal.
+pub const TOPIC_GROUP_WITHDRAWAL_REJECTED: &str = "group_withdrawal_rejected";
+/// Emitted when a group withdrawal reaches threshold and is paid.
+pub const TOPIC_GROUP_WITHDRAWAL_EXECUTED: &str = "group_withdrawal_executed";
 
 // --- group split -------------------------------------------------------
 /// Emitted at the end of a successful `group_set_shares` call.
@@ -114,6 +122,10 @@ pub const TOPIC_INTEREST_WITHDRAW: &str = "interest_withdraw";
 /// Emitted at the end of a successful `interest_claim` call, recording the
 /// interest credited to principal.
 pub const TOPIC_INTEREST_CLAIMED: &str = "interest_claimed";
+
+// --- recurring deposits (#615) --------------------------------------------
+/// Emitted after a recurring deposit is successfully executed.
+pub const TOPIC_RECURRING_DEPOSIT_EXECUTED: &str = "RecurringDepositExecuted";
 
 // --- emergency pause (#428) -----------------------------------------------
 /// Emitted when the contract enters or exits emergency mode.

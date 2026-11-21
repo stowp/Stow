@@ -28,8 +28,10 @@ mod insurance;
 mod interest;
 mod limits;
 mod challenge;
+mod multisig;
 mod locked;
 pub mod rewards;
+mod recurring;
 mod storage;
 mod timelock;
 mod types;
@@ -47,8 +49,9 @@ use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map, String};
 
 use crate::error::Error;
 use crate::types::{
-    CompoundFrequency, FlexibleAccount, Goal, Group, GroupLimits, InsuranceClaimRecord, InterestAccount,
-    LockedPlan, Proposal, UpgradeProposal,
+    CompoundFrequency, FlexibleAccount, Goal, Group, GroupLimits, InsuranceClaimRecord,
+    GroupWithdrawalRequest, InterestAccount, LockedPlan, Proposal, RecurringDeposit,
+    RecurringFrequency, UpgradeProposal,
 };
 
 #[contract]
@@ -166,6 +169,34 @@ impl SavingsVault {
 
     pub fn get_account(env: Env, owner: Address) -> Result<FlexibleAccount, Error> {
         flexible::get_account(&env, owner)
+    }
+
+    // --- recurring deposits (#615) ----------------------------------------
+    /// Set up a recurring wallet deposit. The owner must authorize the call
+    /// and approve the vault as a SEP-41 spender before execution.
+    pub fn setup_recurring(
+        env: Env,
+        owner: Address,
+        amount: i128,
+        frequency: RecurringFrequency,
+    ) -> Result<u64, Error> {
+        recurring::setup(&env, owner, amount, frequency)
+    }
+
+    /// Execute a due recurring deposit. Permissionless; the owner's existing
+    /// SEP-41 allowance funds the transfer.
+    pub fn execute_recurring(env: Env, owner: Address) -> Result<(), Error> {
+        recurring::execute(&env, owner)
+    }
+
+    /// Cancel the owner's recurring deposit schedule.
+    pub fn cancel_recurring(env: Env, owner: Address) -> Result<(), Error> {
+        recurring::cancel(&env, owner)
+    }
+
+    /// Read a recurring deposit schedule, if configured.
+    pub fn recurring_deposit(env: Env, owner: Address) -> Option<RecurringDeposit> {
+        recurring::get(&env, owner)
     }
 
     // --- locked ------------------------------------------------------------
@@ -309,6 +340,50 @@ impl SavingsVault {
 
     pub fn group(env: Env, group_id: u64) -> Result<Group, Error> {
         group::get_group(&env, group_id)
+    }
+
+    // --- group multi-signature withdrawals (#616) -------------------------
+    pub fn request_withdrawal(
+        env: Env,
+        requester: Address,
+        group_id: u64,
+        recipient: Address,
+        amount: i128,
+        threshold: u32,
+        expires_at: u64,
+    ) -> Result<u64, Error> {
+        multisig::request_withdrawal(
+            &env,
+            requester,
+            group_id,
+            recipient,
+            amount,
+            threshold,
+            expires_at,
+        )
+    }
+
+    pub fn approve_withdrawal(
+        env: Env,
+        approver: Address,
+        request_id: u64,
+    ) -> Result<(), Error> {
+        multisig::approve_withdrawal(&env, approver, request_id)
+    }
+
+    pub fn reject_withdrawal(
+        env: Env,
+        rejector: Address,
+        request_id: u64,
+    ) -> Result<(), Error> {
+        multisig::reject_withdrawal(&env, rejector, request_id)
+    }
+
+    pub fn withdrawal_request(
+        env: Env,
+        request_id: u64,
+    ) -> Result<GroupWithdrawalRequest, Error> {
+        multisig::get_withdrawal_request(&env, request_id)
     }
 
     // --- group split -------------------------------------------------------
@@ -537,4 +612,3 @@ impl SavingsVault {
         insurance::get_claim(&env, claimant)
     }
 }
-

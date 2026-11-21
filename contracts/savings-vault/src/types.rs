@@ -70,6 +70,54 @@ pub struct FlexibleAccount {
     pub updated_at: u64,
 }
 
+/// Interval used by a recurring deposit. Monthly means a fixed 30-day period.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecurringFrequency {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl RecurringFrequency {
+    pub fn seconds(self) -> u64 {
+        match self {
+            Self::Daily => 86_400,
+            Self::Weekly => 604_800,
+            Self::Monthly => 2_592_000,
+        }
+    }
+}
+
+/// One recurring wallet deposit schedule per owner.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecurringDeposit {
+    pub owner: Address,
+    pub amount: i128,
+    pub frequency: RecurringFrequency,
+    /// Ledger timestamp at or after which the next deposit may execute.
+    pub next_execution: u64,
+}
+
+/// A pending threshold-approved withdrawal from a group pool.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupWithdrawalRequest {
+    pub id: u64,
+    pub group_id: u64,
+    pub requester: Address,
+    pub recipient: Address,
+    pub amount: i128,
+    /// Number of distinct group-member approvals required for execution.
+    pub threshold: u32,
+    /// Distinct member approvals received so far.
+    pub approvers: Vec<Address>,
+    pub expires_at: u64,
+    pub rejected: bool,
+    pub executed: bool,
+}
+
 /// A locked savings plan: funds cannot be withdrawn until `unlock_at`.
 #[contracttype]
 #[derive(Clone)]
@@ -427,5 +475,13 @@ pub enum DataKey {
     /// Durability: persistent — kept out of the `Group` record so
     /// contributing does not grow it. TTL: bumped on every read/write.
     GroupContribution(u64, Address),
+    /// A recurring deposit schedule keyed by its owner.
+    ///
+    /// Durability: persistent — one entry per owner. TTL is refreshed on
+    /// setup, query, execution, and cancellation.
+    RecurringDeposit(Address),
+    /// Pending multi-signature group withdrawal by request id.
+    GroupWithdrawal(u64),
+    /// Monotonic counter for multi-signature group withdrawal request ids.
+    NextGroupWithdrawalId,
 }
-
