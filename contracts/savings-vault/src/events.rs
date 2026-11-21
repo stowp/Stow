@@ -21,8 +21,6 @@ pub const EVENT_SCHEMA_VERSION: u32 = 1;
 pub const TOPIC_INIT: &str = "init";
 /// Emitted at the end of a successful `set_admin` call.
 pub const TOPIC_ADMIN_SET: &str = "admin_set";
-/// Emitted at the end of a successful `upgrade` call.
-pub const TOPIC_UPGRADED: &str = "upgraded";
 
 // --- pause mechanism -------------------------------------------------------
 /// Emitted when the vault is paused (via `pause` or `set_paused(true)`).
@@ -136,3 +134,13 @@ pub const TOPIC_INSURANCE_FUNDED: &str = "insurance_funded";
 pub const TOPIC_INSURANCE_CLAIM_APPROVED: &str = "insurance_claim_approved";
 /// Emitted when an insurance claim is redeemed.
 pub const TOPIC_INSURANCE_CLAIM_REDEEMED: &str = "insurance_claim_redeemed";
+
+// --- boost nft (#648) -----------------------------------------------------
+/// Emitted by the savings-vault when it awards a boost NFT to a saver for
+/// crossing a milestone. The boost-NFT contract also emits its own `mint`
+/// event; this one carries the award context the indexer needs.
+///
+/// Topics: `(Symbol("boost_nft_awarded"), owner: Address, token_id: u64)`
+/// Data:   `(owner: Address, token_id: u64, tier: Tier, milestone: i128,
+///           timestamp: u64)` — `tier` is the boost-NFT `Tier` enum.
+pub const TOPIC_BOOST_NFT_AWARDED: &str = "boost_nft_awarded";

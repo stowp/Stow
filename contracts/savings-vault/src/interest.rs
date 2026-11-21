@@ -229,6 +229,9 @@ pub fn deposit(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
         (owner, amount, account.principal, now),
     );
 
+    // Award any milestone boost NFTs the new principal qualifies for.
+    crate::boost::check_milestones(env, &account.owner, account.principal)?;
+
     Ok(())
 }
 
@@ -324,6 +327,9 @@ pub fn claim(env: &Env, owner: Address) -> Result<i128, Error> {
         (owner, credited, account.principal, now),
     );
 
+    // Crediting interest raised the principal — award any new milestones.
+    crate::boost::check_milestones(env, &account.owner, account.principal)?;
+
     Ok(credited)
 }
 
@@ -362,13 +368,25 @@ pub fn accrued(env: &Env, owner: Address) -> Result<i128, Error> {
     let compounded = compound(
         env,
         account.principal,
-        account.rate_bps,
+        effective_rate_bps(env, &account),
         account.frequency.periods_per_year(),
         periods,
     )?;
     compounded
         .checked_sub(account.principal)
         .ok_or(Error::Overflow)
+}
+
+/// Effective annual rate applied to `account`: its snapshot base rate plus
+/// the stacked boost from every boost NFT the owner currently holds, capped
+/// at [`MAX_INTEREST_BPS`]. The boost is read live from the boost-NFT
+/// contract (so it follows transfers); it is `0` when no boost-NFT contract
+/// is configured.
+fn effective_rate_bps(env: &Env, account: &InterestAccount) -> u32 {
+    account
+        .rate_bps
+        .saturating_add(crate::boost::total_boost_bps(env, &account.owner))
+        .min(MAX_INTEREST_BPS)
 }
 
 /// Compound `account.principal` over the whole periods elapsed since
@@ -386,7 +404,7 @@ fn settle(env: &Env, account: &mut InterestAccount, now: u64) -> Result<i128, Er
     let compounded = compound(
         env,
         account.principal,
-        account.rate_bps,
+        effective_rate_bps(env, account),
         account.frequency.periods_per_year(),
         periods,
     )?;

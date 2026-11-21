@@ -10,6 +10,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 soroban-sdk = "22.0.0"
+# Sibling contract that mints interest-boost NFTs at savings milestones.
+# Used for the `BoostNftClient` and `Tier` type in `src/boost.rs`.
+boost-nft = { path = "../boost-nft" }
 
 [dev-dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }

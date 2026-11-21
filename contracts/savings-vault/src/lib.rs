@@ -16,6 +16,7 @@
 //! and a `TODO(issue)` describing the work. Each stub is one contributor issue.
 
 mod admin;
+mod boost;
 mod delegation;
 mod error;
 mod events;
@@ -422,6 +423,26 @@ impl SavingsVault {
     /// Preview the interest accrued but not yet credited to `owner`.
     pub fn interest_accrued(env: Env, owner: Address) -> Result<i128, Error> {
         interest::accrued(&env, owner)
+    }
+
+    // --- boost nft (#648) --------------------------------------------------
+    /// Configure the boost-NFT contract address. Admin-only. Until set,
+    /// milestone awarding and interest boosts are disabled (no-ops).
+    pub fn set_boost_nft(env: Env, caller: Address, boost_nft: Address) -> Result<(), Error> {
+        boost::set_boost_nft(&env, caller, boost_nft)
+    }
+
+    /// The configured boost-NFT contract address, or `None` if boosts are
+    /// disabled.
+    pub fn boost_nft(env: Env) -> Option<Address> {
+        boost::boost_nft(&env)
+    }
+
+    /// Total interest boost, in basis points, that `owner` currently earns
+    /// from the boost NFTs they hold (read live from the boost-NFT contract,
+    /// capped at [`boost::MAX_BOOST_BPS`]). `0` when boosts are disabled.
+    pub fn boost_total_bps(env: Env, owner: Address) -> u32 {
+        boost::total_boost_bps(&env, &owner)
     }
 
     // --- emergency mode (#428) --------------------------------------------
