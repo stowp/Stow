@@ -252,6 +252,45 @@ pub struct InsuranceClaimRecord {
     pub redeemed: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Vault split (#629)
+// ---------------------------------------------------------------------------
+
+/// A pending request to split a joint (group) vault back into individual
+/// flexible accounts for each co-owner, proportional to their contributions.
+///
+/// Lifecycle:
+/// 1. Any member calls `vault_split_request` → creates this record with every
+///    member's approval set to `false` and the requester's set to `true`.
+/// 2. Each other co-owner calls `vault_split_approve` → flips their entry to
+///    `true`. Duplicate approvals are rejected with `SplitAlreadyApproved`.
+/// 3. Once all entries are `true`, any signed caller may call
+///    `vault_split_execute` → splits the pool balance by contribution ratio,
+///    credits each member's `FlexibleAccount`, closes the group, and marks
+///    `executed = true`.
+///
+/// Only one un-executed request may exist per group at a time
+/// (`DataKey::GroupActiveSplit` enforces this). The record is kept after
+/// execution so the event data can be re-read off-chain.
+#[contracttype]
+#[derive(Clone)]
+pub struct SplitRequest {
+    /// Unique id for this split request.
+    pub id: u64,
+    /// The group this split dissolves.
+    pub group_id: u64,
+    /// The member who initiated the split.
+    pub requester: Address,
+    /// One entry per group member: `true` once that member has approved.
+    /// Pre-populated from `group.members` on creation; requester's entry is
+    /// set to `true` automatically.
+    pub approvals: Map<Address, bool>,
+    pub created_at: u64,
+    /// Set to `true` by `vault_split_execute` after funds have been
+    /// distributed. Guards against double-execution.
+    pub executed: bool,
+}
+
 /// Storage keys. One variant per logical record family.
 ///
 /// See `storage` module docs for the full storage model: durability
@@ -427,5 +466,27 @@ pub enum DataKey {
     /// Durability: persistent — kept out of the `Group` record so
     /// contributing does not grow it. TTL: bumped on every read/write.
     GroupContribution(u64, Address),
+
+    // --- Vault split (#629) ---
+    /// Monotonic counter for split-request ids.
+    ///
+    /// Durability: instance — small, hot counter incremented on every
+    /// `vault_split_request`. TTL: bumped alongside the rest of instance
+    /// storage.
+    NextSplitId,
+    /// The active (un-executed) `SplitRequest` for a given group, if any.
+    ///
+    /// Stored separately from `SplitRequest(id)` so callers can look up "is
+    /// there a pending split for group X?" in O(1) without scanning all ids.
+    ///
+    /// Durability: persistent — one optional entry per group. TTL: bumped on
+    /// every read/write via `extend_persistent_ttl`. Removed (deleted) once
+    /// the split executes.
+    GroupActiveSplit(u64),
+    /// A `SplitRequest` by its unique id.
+    ///
+    /// Durability: persistent — one entry per request. TTL: bumped on every
+    /// read/write via `extend_persistent_ttl`.
+    SplitRequest(u64),
 }
 

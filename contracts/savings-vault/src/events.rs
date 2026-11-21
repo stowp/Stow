@@ -127,6 +127,23 @@ pub const TOPIC_UPGRADE_PROPOSED: &str = "upgrade_proposed";
 /// Emitted when a pending upgrade is cancelled.
 pub const TOPIC_UPGRADE_CANCELLED: &str = "upgrade_cancelled";
 
+// --- vault split (#629) ---------------------------------------------------
+/// Emitted at the end of a successful `vault_split_request` call.
+///
+/// Topics: `(Symbol("vault_split_requested"), requester: Address, group_id: u64)`
+/// Data:   `(split_id: u64, group_id: u64, requester: Address, timestamp: u64)`
+pub const TOPIC_VAULT_SPLIT_REQUESTED: &str = "vault_split_requested";
+/// Emitted each time a co-owner approves a pending split.
+///
+/// Topics: `(Symbol("vault_split_approved"), approver: Address, split_id: u64)`
+/// Data:   `(split_id: u64, group_id: u64, approver: Address, timestamp: u64)`
+pub const TOPIC_VAULT_SPLIT_APPROVED: &str = "vault_split_approved";
+/// Emitted once per owner when a split is executed (one event per new vault).
+///
+/// Topics: `(Symbol("vault_split"), owner: Address, split_id: u64)`
+/// Data:   `(split_id: u64, group_id: u64, owner: Address, amount: i128, timestamp: u64)`
+pub const TOPIC_VAULT_SPLIT: &str = "vault_split";
+
 // --- insurance fund (#435) ------------------------------------------------
 /// Emitted when the insurance premium rate changes.
 pub const TOPIC_INSURANCE_PREMIUM_SET: &str = "insurance_premium_set";

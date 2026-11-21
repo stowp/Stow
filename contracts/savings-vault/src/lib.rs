@@ -30,6 +30,7 @@ mod limits;
 mod challenge;
 mod locked;
 pub mod rewards;
+mod split;
 mod storage;
 mod timelock;
 mod types;
@@ -43,12 +44,17 @@ mod test;
 #[path = "test/limits_test.rs"]
 mod limits_test;
 
+// Standalone split tests (#629).
+#[cfg(test)]
+#[path = "test/split_test.rs"]
+mod split_test;
+
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map, String};
 
 use crate::error::Error;
 use crate::types::{
     CompoundFrequency, FlexibleAccount, Goal, Group, GroupLimits, InsuranceClaimRecord, InterestAccount,
-    LockedPlan, Proposal, UpgradeProposal,
+    LockedPlan, Proposal, SplitRequest, UpgradeProposal,
 };
 
 #[contract]
@@ -535,6 +541,59 @@ impl SavingsVault {
     /// Read an insurance claim record.
     pub fn insurance_claim(env: Env, claimant: Address) -> Result<InsuranceClaimRecord, Error> {
         insurance::get_claim(&env, claimant)
+    }
+
+    // --- vault split (#629) -----------------------------------------------
+
+    /// Initiate a split of the joint vault identified by `group_id`.
+    ///
+    /// The group must be **closed** before a split can be requested.
+    /// The requester is automatically counted as having approved. All other
+    /// co-owners must call `vault_split_approve` before `vault_split_execute`
+    /// becomes callable.
+    ///
+    /// Returns the new split-request id.
+    pub fn vault_split_request(
+        env: Env,
+        requester: Address,
+        group_id: u64,
+    ) -> Result<u64, Error> {
+        split::request_split(&env, requester, group_id)
+    }
+
+    /// Record `approver`'s consent to the pending split identified by
+    /// `split_id`. Each co-owner may approve exactly once.
+    pub fn vault_split_approve(
+        env: Env,
+        approver: Address,
+        split_id: u64,
+    ) -> Result<(), Error> {
+        split::approve_split(&env, approver, split_id)
+    }
+
+    /// Execute a fully-approved split.
+    ///
+    /// Permissionless once all co-owners have approved — funds always go to
+    /// the recorded members, never to `caller`.
+    ///
+    /// Each member's share of the pool is credited to their `FlexibleAccount`
+    /// (created if absent) proportional to their contribution to the group.
+    /// One `vault_split` event is emitted per member.
+    pub fn vault_split_execute(env: Env, caller: Address, split_id: u64) -> Result<(), Error> {
+        split::execute_split(&env, caller, split_id)
+    }
+
+    /// Read a split request by id, or `NotFound`.
+    pub fn vault_split_request_get(
+        env: Env,
+        split_id: u64,
+    ) -> Result<SplitRequest, Error> {
+        split::get_split_request(&env, split_id)
+    }
+
+    /// Return the active (un-executed) split-request id for `group_id`, if any.
+    pub fn vault_split_active(env: Env, group_id: u64) -> Option<u64> {
+        split::active_split_id(&env, group_id)
     }
 }
 
