@@ -39,6 +39,7 @@ use crate::events::{
     TOPIC_INTEREST_CLAIMED, TOPIC_INTEREST_DEPOSIT, TOPIC_INTEREST_FREQUENCY_SET,
     TOPIC_INTEREST_RATE_SET, TOPIC_INTEREST_WITHDRAW,
 };
+use crate::interest_tiers;
 use crate::rewards;
 use crate::storage::{self, extend_instance_ttl};
 use crate::types::{CompoundFrequency, DataKey, InterestAccount};
@@ -207,13 +208,21 @@ pub fn deposit(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
     // Settle under the account's snapshot *before* adopting the latest
     // global config, so a rate/frequency change never re-prices old time.
     settle(env, &mut account, now)?;
-    account.rate_bps = rate_bps(env);
     account.frequency = frequency(env);
 
-    account.principal = account
+    // Recompute the effective rate from tiers based on the post-settle
+    // principal plus the new deposit amount.  We use the new balance here so
+    // that a deposit that crosses a tier boundary immediately earns the higher
+    // rate from this point forward.
+    let new_balance = account
         .principal
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
+    let old_rate_bps = account.rate_bps;
+    let new_rate_bps = interest_tiers::effective_rate_bps(env, new_balance, 0);
+    account.rate_bps = new_rate_bps;
+
+    account.principal = new_balance;
     account.updated_at = now;
 
     storage::transfer_in(env, &owner, amount)?;
@@ -223,6 +232,11 @@ pub fn deposit(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
 
     // Notify reward streak tracker that the user is active.
     rewards::note_touch(env, &owner);
+
+    // Emit tier-change event if the effective rate shifted.
+    if new_rate_bps != old_rate_bps {
+        interest_tiers::emit_rate_changed(env, &owner, old_rate_bps, new_rate_bps, new_balance, 0);
+    }
 
     env.events().publish(
         (TOPIC_INTEREST_DEPOSIT, owner.clone()),
@@ -259,7 +273,6 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
 
     let now = env.ledger().timestamp();
     settle(env, &mut account, now)?;
-    account.rate_bps = rate_bps(env);
     account.frequency = frequency(env);
 
     if amount > account.principal {
@@ -273,6 +286,10 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
 
     storage::transfer_out(env, &owner, amount)?;
 
+    // Update the tiered rate based on the post-withdrawal balance.
+    let old_rate_bps = account.rate_bps;
+    let new_rate_bps = interest_tiers::effective_rate_bps(env, new_principal, 0);
+    account.rate_bps = new_rate_bps;
     account.principal = new_principal;
     account.updated_at = now;
     env.storage().persistent().set(&key, &account);
@@ -280,6 +297,18 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
 
     // Notify reward streak tracker that the user is active.
     rewards::note_touch(env, &owner);
+
+    // Emit tier-change event if the effective rate shifted.
+    if new_rate_bps != old_rate_bps {
+        interest_tiers::emit_rate_changed(
+            env,
+            &owner,
+            old_rate_bps,
+            new_rate_bps,
+            new_principal,
+            0,
+        );
+    }
 
     env.events().publish(
         (TOPIC_INTEREST_WITHDRAW, owner.clone()),
@@ -312,12 +341,28 @@ pub fn claim(env: &Env, owner: Address) -> Result<i128, Error> {
 
     let now = env.ledger().timestamp();
     let credited = settle(env, &mut account, now)?;
-    account.rate_bps = rate_bps(env);
     account.frequency = frequency(env);
+
+    // Refresh tiered rate based on current principal after settlement.
+    let old_rate_bps = account.rate_bps;
+    let new_rate_bps = interest_tiers::effective_rate_bps(env, account.principal, 0);
+    account.rate_bps = new_rate_bps;
     account.updated_at = now;
 
     env.storage().persistent().set(&key, &account);
     storage::extend_persistent_ttl(env, &key);
+
+    // Emit tier-change event if the effective rate shifted.
+    if new_rate_bps != old_rate_bps {
+        interest_tiers::emit_rate_changed(
+            env,
+            &owner,
+            old_rate_bps,
+            new_rate_bps,
+            account.principal,
+            0,
+        );
+    }
 
     env.events().publish(
         (TOPIC_INTEREST_CLAIMED, owner.clone()),

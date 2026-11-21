@@ -103,6 +103,16 @@ pub enum Error {
     /// A token callback attempted a nested token transfer.
     ReentrantCall = 115,
 
+    // --- Vault Split (100-109) ---
+    /// A split request already exists for this group and has not been executed.
+    SplitAlreadyRequested = 100,
+    /// This co-owner has already approved the pending split.
+    SplitAlreadyApproved = 101,
+    /// No pending (un-executed) split request exists for this id.
+    SplitNotPending = 102,
+    /// Not all co-owners have approved the split yet.
+    SplitNotFullyApproved = 103,
+
     // --- Rewards (120-129) ---
     /// The reward pool has insufficient funds; partial payment was made.
     RewardPoolShortfall = 120,
@@ -110,4 +120,11 @@ pub enum Error {
     InvalidRewardConfig = 121,
     /// No reward has accrued yet (nothing to claim).
     NoRewardAccrued = 122,
+
+    // --- Upgrade / migration (130-139) ---
+    /// A conflicting state already exists (e.g. a pending upgrade proposal is
+    /// already recorded and a second `propose_upgrade` was attempted).
+    ConflictingState = 130,
+    /// A rollback was attempted but no previous version snapshot is available.
+    NoRollbackAvailable = 131,
 }
