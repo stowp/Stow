@@ -48,6 +48,7 @@ async function bootstrap() {
       'Authorization',
       'X-API-Key',
       'Idempotency-Key',
+      'X-Webhook-Signature',
     ],
     maxAge: 86400,
   });
