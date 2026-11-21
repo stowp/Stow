@@ -5,7 +5,7 @@ use soroban_sdk::{Address, BytesN, Env};
 use crate::error::Error;
 use crate::events::{
     EVENT_SCHEMA_VERSION, TOPIC_ADMIN_SET, TOPIC_EMERGENCY_MODE_SET, TOPIC_INIT, TOPIC_PAUSED,
-    TOPIC_UNPAUSED, TOPIC_UPGRADE_CANCELLED, TOPIC_UPGRADE_PROPOSED, TOPIC_UPGRADED,
+    TOPIC_UNPAUSED,
 };
 use crate::storage::{self, extend_instance_ttl};
 use crate::types::{DataKey, UpgradeProposal};
@@ -363,28 +363,18 @@ pub fn require_not_emergency(env: &Env) -> Result<(), Error> {
 
 /// The current contract version. Starts at 1 after `initialize`.
 pub fn version(env: &Env) -> u32 {
-    env.storage().instance().get(&DataKey::Version).unwrap_or(1)
+    crate::upgrade::version(env)
 }
 
 /// The configured upgrade delay in seconds. Defaults to 0 (no delay).
 pub fn upgrade_delay(env: &Env) -> u64 {
-    env.storage().instance().get(&DataKey::UpgradeDelay).unwrap_or(0)
+    crate::upgrade::upgrade_delay(env)
 }
 
 /// Set the minimum delay before a proposed upgrade can be executed.
 /// Admin-only.
 pub fn set_upgrade_delay(env: &Env, caller: Address, seconds: u64) -> Result<(), Error> {
-    extend_instance_ttl(env);
-
-    let current_admin = admin(env)?;
-    caller.require_auth();
-    if caller != current_admin {
-        return Err(Error::Unauthorized);
-    }
-
-    env.storage().instance().set(&DataKey::UpgradeDelay, &seconds);
-
-    Ok(())
+    crate::upgrade::set_upgrade_delay(env, caller, seconds)
 }
 
 /// Propose an upgrade. Admin-only. The upgrade cannot execute until
@@ -394,107 +384,27 @@ pub fn propose_upgrade(
     caller: Address,
     new_wasm_hash: BytesN<32>,
 ) -> Result<(), Error> {
-    extend_instance_ttl(env);
-
-    let current_admin = admin(env)?;
-    caller.require_auth();
-    if caller != current_admin {
-        return Err(Error::Unauthorized);
-    }
-
-    if env.storage().instance().has(&DataKey::PendingUpgrade) {
-        return Err(Error::ConflictingState);
-    }
-
-    let now = env.ledger().timestamp();
-    let delay = upgrade_delay(env);
-    let proposal = UpgradeProposal {
-        new_wasm_hash: new_wasm_hash.clone(),
-        proposed_by: caller.clone(),
-        proposed_at: now,
-        execute_after: now + delay,
-    };
-
-    env.storage().instance().set(&DataKey::PendingUpgrade, &proposal);
-
-    env.events().publish(
-        (TOPIC_UPGRADE_PROPOSED,),
-        (caller, new_wasm_hash, now, now + delay),
-    );
-
-    Ok(())
+    crate::upgrade::propose_upgrade(env, caller, new_wasm_hash)
 }
 
 /// Execute a pending upgrade after its timelock has elapsed. Admin-only.
 pub fn execute_upgrade(env: &Env, caller: Address) -> Result<(), Error> {
-    extend_instance_ttl(env);
-
-    let current_admin = admin(env)?;
-    caller.require_auth();
-    if caller != current_admin {
-        return Err(Error::Unauthorized);
-    }
-
-    let proposal: UpgradeProposal = env
-        .storage()
-        .instance()
-        .get(&DataKey::PendingUpgrade)
-        .ok_or(Error::NotFound)?;
-
-    let now = env.ledger().timestamp();
-    if now < proposal.execute_after {
-        return Err(Error::TimeWindowNotOpen);
-    }
-
-    env.deployer()
-        .update_current_contract_wasm(proposal.new_wasm_hash.clone());
-
-    let ver = version(env) + 1;
-    env.storage().instance().set(&DataKey::Version, &ver);
-    env.storage().instance().remove(&DataKey::PendingUpgrade);
-
-    env.events().publish(
-        (TOPIC_UPGRADED,),
-        (caller, proposal.new_wasm_hash, now),
-    );
-
-    Ok(())
+    crate::upgrade::execute_upgrade(env, caller)
 }
 
 /// Cancel a pending upgrade. Admin-only.
 pub fn cancel_upgrade(env: &Env, caller: Address) -> Result<(), Error> {
-    extend_instance_ttl(env);
-
-    let current_admin = admin(env)?;
-    caller.require_auth();
-    if caller != current_admin {
-        return Err(Error::Unauthorized);
-    }
-
-    if !env.storage().instance().has(&DataKey::PendingUpgrade) {
-        return Err(Error::NotFound);
-    }
-
-    env.storage().instance().remove(&DataKey::PendingUpgrade);
-
-    env.events().publish(
-        (TOPIC_UPGRADE_CANCELLED,),
-        (caller, env.ledger().timestamp()),
-    );
-
-    Ok(())
+    crate::upgrade::cancel_upgrade(env, caller)
 }
 
 /// Read the pending upgrade proposal, if any.
 pub fn pending_upgrade(env: &Env) -> Option<UpgradeProposal> {
-    env.storage().instance().get(&DataKey::PendingUpgrade)
+    crate::upgrade::pending_upgrade(env)
 }
 
 /// Run post-upgrade state migration. Admin-only.
 ///
 /// Called after an upgrade to migrate state to the new version's schema.
-/// This is a no-op placeholder: each future upgrade version adds its own
-/// migration logic here, guarded by `from_version`.
 pub fn migrate(env: &Env, caller: Address) -> Result<(), Error> {
     extend_instance_ttl(env);
 
@@ -504,5 +414,5 @@ pub fn migrate(env: &Env, caller: Address) -> Result<(), Error> {
         return Err(Error::Unauthorized);
     }
 
-    Ok(())
+    crate::migration::run_migration(env)
 }

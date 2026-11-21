@@ -26,13 +26,17 @@ mod group;
 mod group_split;
 mod insurance;
 mod interest;
+pub mod interest_tiers;
 mod limits;
 mod challenge;
 mod locked;
+pub mod migration;
 pub mod rewards;
+mod split;
 mod storage;
 mod timelock;
 mod types;
+pub mod upgrade;
 mod voting;
 
 #[cfg(test)]
@@ -43,12 +47,27 @@ mod test;
 #[path = "test/limits_test.rs"]
 mod limits_test;
 
+// Standalone split tests (#629).
+#[cfg(test)]
+#[path = "test/split_test.rs"]
+mod split_test;
+
+// Standalone interest tier tests (#619).
+#[cfg(test)]
+#[path = "test/interest_test.rs"]
+mod interest_test;
+
+// Standalone upgrade tests (#618).
+#[cfg(test)]
+#[path = "test/upgrade_test.rs"]
+mod upgrade_test;
+
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map, String};
 
 use crate::error::Error;
 use crate::types::{
     CompoundFrequency, FlexibleAccount, Goal, Group, GroupLimits, InsuranceClaimRecord, InterestAccount,
-    LockedPlan, Proposal, UpgradeProposal,
+    LockedPlan, Proposal, SplitRequest, TieredRateConfig, UpgradeProposal,
 };
 
 #[contract]
@@ -424,6 +443,32 @@ impl SavingsVault {
         interest::accrued(&env, owner)
     }
 
+    // --- interest rate tiers (#619) ----------------------------------------
+
+    /// Set the tiered interest-rate configuration. Admin-only.
+    ///
+    /// Rates must be non-decreasing across balance tiers (`low ≤ mid ≤ high`).
+    /// No individual rate or bonus may exceed 10 000 bps (100 %). Emits an
+    /// `InterestRateChanged` event.
+    ///
+    /// Errors: `NotInitialized`, `Unauthorized`, `InvalidParameters`.
+    pub fn set_tiered_rate_config(
+        env: Env,
+        caller: Address,
+        config: TieredRateConfig,
+    ) -> Result<(), Error> {
+        interest_tiers::set_tiered_rate_config(&env, caller, config)
+    }
+
+    /// Return the effective annual interest rate (bps) for an account with
+    /// principal `balance` and remaining lock duration `lock_secs`.
+    ///
+    /// Pass `lock_secs = 0` for accounts with no active lock. This is a
+    /// read-only view; it neither mutates state nor emits events.
+    pub fn query_interest_rate(env: Env, balance: i128, lock_secs: u64) -> u32 {
+        interest_tiers::query_rate(&env, balance, lock_secs)
+    }
+
     // --- emergency mode (#428) --------------------------------------------
 
     /// Activate or deactivate emergency mode. Admin-only.
@@ -485,6 +530,27 @@ impl SavingsVault {
         admin::migrate(&env, caller)
     }
 
+    /// Roll back to the previous version. Admin-only.
+    ///
+    /// Available only after a successful `execute_upgrade`; the rollback
+    /// snapshot is cleared once used (single-level rollback). Decrements the
+    /// version counter and emits an `upgrade_rolled_back` event.
+    ///
+    /// Errors `NoRollbackAvailable` if no snapshot exists (either no upgrade
+    /// has been executed since initialize, or rollback has already been used
+    /// once since the last upgrade).
+    pub fn rollback_upgrade(env: Env, caller: Address) -> Result<(), Error> {
+        upgrade::rollback_upgrade(&env, caller)
+    }
+
+    /// Whether a rollback snapshot is currently available.
+    ///
+    /// Returns `true` immediately after a successful `execute_upgrade` and
+    /// `false` after `rollback_upgrade` is called (or before the first upgrade).
+    pub fn rollback_available(env: Env) -> bool {
+        upgrade::rollback_available(&env)
+    }
+
     // --- insurance fund (#435) --------------------------------------------
 
     /// The insurance premium rate in basis points.
@@ -535,6 +601,59 @@ impl SavingsVault {
     /// Read an insurance claim record.
     pub fn insurance_claim(env: Env, claimant: Address) -> Result<InsuranceClaimRecord, Error> {
         insurance::get_claim(&env, claimant)
+    }
+
+    // --- vault split (#629) -----------------------------------------------
+
+    /// Initiate a split of the joint vault identified by `group_id`.
+    ///
+    /// The group must be **closed** before a split can be requested.
+    /// The requester is automatically counted as having approved. All other
+    /// co-owners must call `vault_split_approve` before `vault_split_execute`
+    /// becomes callable.
+    ///
+    /// Returns the new split-request id.
+    pub fn vault_split_request(
+        env: Env,
+        requester: Address,
+        group_id: u64,
+    ) -> Result<u64, Error> {
+        split::request_split(&env, requester, group_id)
+    }
+
+    /// Record `approver`'s consent to the pending split identified by
+    /// `split_id`. Each co-owner may approve exactly once.
+    pub fn vault_split_approve(
+        env: Env,
+        approver: Address,
+        split_id: u64,
+    ) -> Result<(), Error> {
+        split::approve_split(&env, approver, split_id)
+    }
+
+    /// Execute a fully-approved split.
+    ///
+    /// Permissionless once all co-owners have approved — funds always go to
+    /// the recorded members, never to `caller`.
+    ///
+    /// Each member's share of the pool is credited to their `FlexibleAccount`
+    /// (created if absent) proportional to their contribution to the group.
+    /// One `vault_split` event is emitted per member.
+    pub fn vault_split_execute(env: Env, caller: Address, split_id: u64) -> Result<(), Error> {
+        split::execute_split(&env, caller, split_id)
+    }
+
+    /// Read a split request by id, or `NotFound`.
+    pub fn vault_split_request_get(
+        env: Env,
+        split_id: u64,
+    ) -> Result<SplitRequest, Error> {
+        split::get_split_request(&env, split_id)
+    }
+
+    /// Return the active (un-executed) split-request id for `group_id`, if any.
+    pub fn vault_split_active(env: Env, group_id: u64) -> Option<u64> {
+        split::active_split_id(&env, group_id)
     }
 }
 

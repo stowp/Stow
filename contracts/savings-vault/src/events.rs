@@ -21,8 +21,6 @@ pub const EVENT_SCHEMA_VERSION: u32 = 1;
 pub const TOPIC_INIT: &str = "init";
 /// Emitted at the end of a successful `set_admin` call.
 pub const TOPIC_ADMIN_SET: &str = "admin_set";
-/// Emitted at the end of a successful `upgrade` call.
-pub const TOPIC_UPGRADED: &str = "upgraded";
 
 // --- pause mechanism -------------------------------------------------------
 /// Emitted when the vault is paused (via `pause` or `set_paused(true)`).
@@ -99,8 +97,6 @@ pub const TOPIC_GROUP_VOTE_CAST: &str = "group_vote_cast";
 pub const TOPIC_GROUP_PROPOSAL_EXECUTED: &str = "group_proposal_executed";
 
 // --- upgrade -----------------------------------------------------------
-/// Emitted at the end of a successful `upgrade` call.
-pub const TOPIC_UPGRADED: &str = "upgraded";
 
 // --- interest ----------------------------------------------------------
 /// Emitted at the end of a successful `set_interest_rate` call.
@@ -114,6 +110,14 @@ pub const TOPIC_INTEREST_WITHDRAW: &str = "interest_withdraw";
 /// Emitted at the end of a successful `interest_claim` call, recording the
 /// interest credited to principal.
 pub const TOPIC_INTEREST_CLAIMED: &str = "interest_claimed";
+/// Emitted when the effective interest rate changes for an account, e.g.
+/// after a deposit crosses a balance tier threshold or the lock period
+/// changes. Also emitted by `set_tiered_rate_config`.
+///
+/// Topics: `(Symbol("interest_rate_changed"), owner: Address)` or just
+///         `(Symbol("interest_rate_changed"),)` for the admin config event.
+/// Data:   see [`crate::interest_tiers`] for field ordering.
+pub const TOPIC_INTEREST_RATE_CHANGED: &str = "interest_rate_changed";
 
 // --- emergency pause (#428) -----------------------------------------------
 /// Emitted when the contract enters or exits emergency mode.
@@ -121,11 +125,39 @@ pub const TOPIC_EMERGENCY_MODE_SET: &str = "emergency_mode_set";
 /// Emitted on a successful emergency withdrawal.
 pub const TOPIC_EMERGENCY_WITHDRAW: &str = "emergency_withdraw";
 
-// --- contract upgrade (#429) ----------------------------------------------
+// --- contract upgrade (#429 / #618) ---------------------------------------
 /// Emitted when an upgrade is proposed.
 pub const TOPIC_UPGRADE_PROPOSED: &str = "upgrade_proposed";
 /// Emitted when a pending upgrade is cancelled.
 pub const TOPIC_UPGRADE_CANCELLED: &str = "upgrade_cancelled";
+/// Emitted when a pending upgrade executes successfully.
+///
+/// Topics: `(Symbol("upgraded"),)`
+/// Data:   `(caller: Address, new_wasm_hash: BytesN<32>, old_version: u32,
+///            new_version: u32, timestamp: u64)`
+pub const TOPIC_UPGRADED: &str = "upgraded";
+/// Emitted when the contract is rolled back to a previous version.
+///
+/// Topics: `(Symbol("upgrade_rolled_back"),)`
+/// Data:   `(caller: Address, restored_version: u32, timestamp: u64)`
+pub const TOPIC_UPGRADE_ROLLED_BACK: &str = "upgrade_rolled_back";
+
+// --- vault split (#629) ---------------------------------------------------
+/// Emitted at the end of a successful `vault_split_request` call.
+///
+/// Topics: `(Symbol("vault_split_requested"), requester: Address, group_id: u64)`
+/// Data:   `(split_id: u64, group_id: u64, requester: Address, timestamp: u64)`
+pub const TOPIC_VAULT_SPLIT_REQUESTED: &str = "vault_split_requested";
+/// Emitted each time a co-owner approves a pending split.
+///
+/// Topics: `(Symbol("vault_split_approved"), approver: Address, split_id: u64)`
+/// Data:   `(split_id: u64, group_id: u64, approver: Address, timestamp: u64)`
+pub const TOPIC_VAULT_SPLIT_APPROVED: &str = "vault_split_approved";
+/// Emitted once per owner when a split is executed (one event per new vault).
+///
+/// Topics: `(Symbol("vault_split"), owner: Address, split_id: u64)`
+/// Data:   `(split_id: u64, group_id: u64, owner: Address, amount: i128, timestamp: u64)`
+pub const TOPIC_VAULT_SPLIT: &str = "vault_split";
 
 // --- insurance fund (#435) ------------------------------------------------
 /// Emitted when the insurance premium rate changes.
