@@ -26,31 +26,19 @@ const MAX_RETRIES = 5;
 const BATCH_SIZE = 100;
 const BACKFILL_MAX_PAGES = 1000;
 
-/**
- * Topic emitted by the yield-adapter when a pending withdrawal is claimed.
- */
+/** Topic emitted by the yield-adapter when a pending withdrawal is claimed. */
 export const WITHDRAW_CLAIMED_TOPIC = 'withdraw_claimed';
 
-/**
- * Indexes on-chain events emitted by the Stow savings-vault contract into the
- * `contract_events` store, applies them to the savings projections via
- * `SavingsProjectionService`, and exposes read/replay/metrics APIs.
- */
 @Injectable()
 export class IndexerService implements OnModuleInit {
   private readonly logger = new Logger(IndexerService.name);
   private isRunning = false;
-  private startTime: number = Date.now();
+  private startTime = Date.now();
   private eventsProcessed = 0;
   private depositsProcessed = 0;
   private withdrawalsProcessed = 0;
   private lastProcessedAt = Date.now();
   private eventTimestamps: number[] = [];
-
-  /**
-   * Pending withdrawals keyed by their on-chain withdrawal id. A record is
-   * removed once the matching `withdraw_claimed` event is decoded.
-   */
   private readonly pendingWithdrawals = new Map<string, Record<string, unknown>>();
 
   constructor(
@@ -75,15 +63,12 @@ export class IndexerService implements OnModuleInit {
     this.logger.log(`Indexer initialized at ledger ${last}`);
   }
 
-  // --- polling ------------------------------------------------------------
-
   @Cron(CronExpression.EVERY_30_SECONDS)
   async pollContractEvents(): Promise<void> {
     const contractId = this.configService.get<string>('SOROBAN_CONTRACT_ID');
-    if (!contractId || contractId === 'your-contract-id-here') {
-      return; // Skip until the savings-vault contract is deployed.
-    }
+    if (!contractId || contractId === 'your-contract-id-here') return;
     if (this.isRunning) return;
+
     this.isRunning = true;
     try {
       await this.fetchAndPersistEvents();
@@ -98,12 +83,9 @@ export class IndexerService implements OnModuleInit {
   async fetchAndPersistEvents(): Promise<number> {
     const lastProcessed = await this.getCheckpoint(CHECKPOINT_LEDGER_KEY);
     const startLedger = lastProcessed > 0 ? lastProcessed + 1 : 1;
+    const { events, latestLedger } = await this.sorobanService.getEvents(startLedger);
 
-    const { events, latestLedger } =
-      await this.sorobanService.getEvents(startLedger);
-
-    const safeLatestLedger =
-      typeof latestLedger === 'number' ? latestLedger : lastProcessed;
+    const safeLatestLedger = typeof latestLedger === 'number' ? latestLedger : lastProcessed;
     if (safeLatestLedger > 0) {
       await this.setCheckpoint(CHECKPOINT_LEDGER_KEY_LATEST, safeLatestLedger);
     }
@@ -114,40 +96,32 @@ export class IndexerService implements OnModuleInit {
     for (let index = 0; index < events.length; index++) {
       const rpcEvent = events[index];
       const logIndex = index;
-
       const existing = await this.contractEventRepository.findOne({
         where: { ledger: rpcEvent.ledger, log_index: logIndex },
       });
 
       if (!existing) {
-        const eventType =
-          rpcEvent.topic && rpcEvent.topic.length > 0
-            ? rpcEvent.topic[0]
-            : 'unknown';
-
-        const contractEvent = this.contractEventRepository.create({
-          ledger: rpcEvent.ledger,
-          log_index: logIndex,
-          event_type: eventType,
-          data: rpcEvent.value,
-          tx_hash: rpcEvent.txHash ?? null,
-          status: ContractEventStatus.PENDING,
-          retry_count: 0,
-        });
-
-        await this.contractEventRepository.save(contractEvent);
+        const eventType = rpcEvent.topic?.length ? rpcEvent.topic[0] : 'unknown';
+        await this.contractEventRepository.save(
+          this.contractEventRepository.create({
+            ledger: rpcEvent.ledger,
+            log_index: logIndex,
+            event_type: eventType,
+            data: rpcEvent.value,
+            tx_hash: rpcEvent.txHash ?? null,
+            status: ContractEventStatus.PENDING,
+            retry_count: 0,
+          }),
+        );
         persistedCount++;
       }
 
-      if (rpcEvent.ledger > maxEventLedger) {
-        maxEventLedger = rpcEvent.ledger;
-      }
+      if (rpcEvent.ledger > maxEventLedger) maxEventLedger = rpcEvent.ledger;
     }
 
-    const newCheckpoint =
-      events.length > 0
-        ? Math.max(maxEventLedger, safeLatestLedger)
-        : Math.max(lastProcessed, safeLatestLedger);
+    const newCheckpoint = events.length > 0
+      ? Math.max(maxEventLedger, safeLatestLedger)
+      : Math.max(lastProcessed, safeLatestLedger);
 
     if (newCheckpoint > lastProcessed) {
       await this.setCheckpoint(CHECKPOINT_LEDGER_KEY, newCheckpoint);
@@ -162,9 +136,7 @@ export class IndexerService implements OnModuleInit {
       order: { ledger: 'ASC' },
       take: BATCH_SIZE,
     });
-    for (const event of pending) {
-      await this.applyEvent(event);
-    }
+    for (const event of pending) await this.applyEvent(event);
   }
 
   private async applyEvent(event: ContractEvent): Promise<void> {
@@ -175,22 +147,14 @@ export class IndexerService implements OnModuleInit {
       this.recordProcessed(event.event_type);
     } catch (err) {
       event.retry_count = (event.retry_count ?? 0) + 1;
-      event.status =
-        event.retry_count >= MAX_RETRIES
-          ? ContractEventStatus.DLQ
-          : ContractEventStatus.FAILED;
+      event.status = event.retry_count >= MAX_RETRIES
+        ? ContractEventStatus.DLQ
+        : ContractEventStatus.FAILED;
       await this.contractEventRepository.save(event);
       this.logger.warn(`Event ${event.id} failed: ${(err as Error).message}`);
     }
   }
 
-  /**
-   * Decode an event and apply its side effects. Yield-adapter topics are
-   * handled directly here (see `applyWithdrawRequested` / `applyWithdrawCancelled`
-   * / `applyHarvested`); everything else is a savings-vault topic, routed to
-   * the shared savings-projection service (update savings balances, mark
-   * goals reached, record group settlements, etc.).
-   */
   private async decodeAndApply(event: ContractEvent): Promise<void> {
     switch (event.event_type) {
       case WITHDRAW_CLAIMED_TOPIC:
@@ -206,22 +170,13 @@ export class IndexerService implements OnModuleInit {
         await this.applyHarvested(event);
         return;
       default:
-        await this.savingsProjectionService.apply(
-          event.event_type,
-          event.data ?? {},
-        );
+        await this.savingsProjectionService.apply(event.event_type, event.data ?? {});
     }
   }
 
-  /**
-   * Decode a yield-adapter `withdraw_requested` event into a queryable
-   * pending-withdrawal record, keyed by the adapter's own request id so a
-   * replayed event upserts rather than duplicates.
-   */
   private async applyWithdrawRequested(event: ContractEvent): Promise<void> {
     const data = event.data ?? {};
     const requestId = String(data.id ?? data.request_id);
-
     const existing = await this.pendingWithdrawalRepository.findOne({
       where: { request_id: requestId },
     });
@@ -238,10 +193,6 @@ export class IndexerService implements OnModuleInit {
     );
   }
 
-  /**
-   * Decode a yield-adapter `withdraw_claimed` event and resolve the matching
-   * pending-withdrawal record so it no longer shows as pending.
-   */
   private decodeWithdrawClaimed(data: Record<string, unknown>): void {
     const withdrawalId = this.extractWithdrawalId(data);
     if (withdrawalId === null) {
@@ -254,75 +205,35 @@ export class IndexerService implements OnModuleInit {
       this.withdrawalsProcessed++;
       this.logger.log(`Resolved pending withdrawal ${withdrawalId}`);
     } else {
-      this.logger.warn(
-        `withdraw_claimed for unknown withdrawal ${withdrawalId}`,
-      );
+      this.logger.warn(`withdraw_claimed for unknown withdrawal ${withdrawalId}`);
     }
   }
 
-  /**
-   * Extract the withdrawal id from a decoded event payload, tolerating the
-   * common field names used by the yield-adapter contract.
-   */
   private extractWithdrawalId(data: Record<string, unknown>): string | null {
-    const candidate =
-      data.withdrawal_id ??
-      data.withdrawalId ??
-      data.id ??
-      data.request_id ??
-      data.requestId;
-
-    if (candidate === undefined || candidate === null) {
-      return null;
-    }
-    return String(candidate);
+    const candidate = data.withdrawal_id ?? data.withdrawalId ?? data.id ??
+      data.request_id ?? data.requestId;
+    return candidate === undefined || candidate === null ? null : String(candidate);
   }
 
-  /**
-   * Register a pending withdrawal so a later `withdraw_claimed` event can
-   * resolve it. Exposed for the indexer pipeline and tests.
-   */
-  registerPendingWithdrawal(
-    withdrawalId: string,
-    record: Record<string, unknown> = {},
-  ): void {
+  registerPendingWithdrawal(withdrawalId: string, record: Record<string, unknown> = {}): void {
     this.pendingWithdrawals.set(withdrawalId, record);
   }
 
-  /**
-   * Whether a withdrawal is still awaiting its `withdraw_claimed` event.
-   */
   isWithdrawalPending(withdrawalId: string): boolean {
     return this.pendingWithdrawals.has(withdrawalId);
   }
 
-  /**
-   * Decode a yield-adapter `withdraw_cancelled` event: mark the matching
-   * pending-withdrawal record cancelled, distinct from claimed. A no-op if
-   * the originating `withdraw_requested` hasn't been indexed yet (e.g. out
-   * of order delivery); the retry/backfill path will catch it up.
-   */
   private async applyWithdrawCancelled(event: ContractEvent): Promise<void> {
     const data = event.data ?? {};
     const requestId = String(data.id ?? data.request_id);
-
     await this.pendingWithdrawalRepository.update(
       { request_id: requestId },
-      {
-        status: PendingWithdrawalStatus.CANCELLED,
-        cancelled_at: new Date(),
-      },
+      { status: PendingWithdrawalStatus.CANCELLED, cancelled_at: new Date() },
     );
   }
 
-  /**
-   * Decode a yield-adapter `harvested` event into a harvest-history record,
-   * preserving the signed delta (positive yield, negative loss) and the fee
-   * taken (`0` on a loss).
-   */
   private async applyHarvested(event: ContractEvent): Promise<void> {
     const data = event.data ?? {};
-
     await this.harvestHistoryRepository.save(
       this.harvestHistoryRepository.create({
         delta: this.stringifyStroops(data.delta),
@@ -334,50 +245,23 @@ export class IndexerService implements OnModuleInit {
     );
   }
 
-  /**
-   * Renders a decoded contract event's stroop-amount field (i128, so kept
-   * as a string rather than a JS `number` to avoid precision loss) as a
-   * string. `fallback` is used only when `value` is absent
-   * (`undefined`/`null`); a present value of the wrong type (e.g. an
-   * object, where the RPC's XDR decoding produced something unexpected)
-   * throws instead of silently rendering `'[object Object]'` or being
-   * swapped for the fallback, so a malformed event fails loudly rather
-   * than masquerading as a valid zero amount.
-   */
   private stringifyStroops(value: unknown, fallback?: string): string {
     if (value === undefined || value === null) {
       if (fallback === undefined) {
-        throw new Error(
-          'stringifyStroops: value is missing and no fallback was given',
-        );
+        throw new Error('stringifyStroops: value is missing and no fallback was given');
       }
       return fallback;
     }
-    if (
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'bigint'
-    ) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') {
       return String(value);
     }
-    throw new Error(
-      `stringifyStroops: unexpected type ${typeof value} for a stroop-amount field`,
-    );
+    throw new Error(`stringifyStroops: unexpected type ${typeof value} for a stroop-amount field`);
   }
 
-  /**
-   * Converts a contract event field carrying a Soroban `u64` ledger
-   * timestamp in whole seconds since the Unix epoch — decoded as a JS
-   * `number`, `string`, or `bigint` depending on the XDR normalization step
-   * upstream — into a `Date`.
-   */
   private toDate(value: unknown): Date {
-    const seconds =
-      typeof value === 'bigint' ? Number(value) : Number(value ?? 0);
+    const seconds = typeof value === 'bigint' ? Number(value) : Number(value ?? 0);
     return new Date(seconds * 1000);
   }
-
-  // --- replay / maintenance ----------------------------------------------
 
   async reindex(fromLedger: number): Promise<void> {
     await this.setCheckpoint(CHECKPOINT_LEDGER_KEY, fromLedger);
@@ -388,10 +272,7 @@ export class IndexerService implements OnModuleInit {
     await this.pollContractEvents();
   }
 
-  async backfillEvents(
-    fromLedger: number,
-    toLedger: number,
-  ): Promise<BackfillResponseDto> {
+  async backfillEvents(fromLedger: number, toLedger: number): Promise<BackfillResponseDto> {
     this.logger.log(`Backfill requested ${fromLedger}..${toLedger}`);
     let totalFetched = 0;
     let newlyProcessed = 0;
@@ -404,19 +285,17 @@ export class IndexerService implements OnModuleInit {
 
       while (cursor <= toLedger && pages < BACKFILL_MAX_PAGES) {
         pages++;
-
         const { events } = await this.sorobanService.getEvents(cursor);
         if (events.length === 0) break;
 
         const inRangeEvents = events.filter(
-          (e) => e.ledger >= fromLedger && e.ledger <= toLedger,
+          (event) => event.ledger >= fromLedger && event.ledger <= toLedger,
         );
         totalFetched += inRangeEvents.length;
 
         for (let index = 0; index < inRangeEvents.length; index++) {
           const rpcEvent = inRangeEvents[index];
           const logIndex = index;
-
           const existing = await this.contractEventRepository.findOne({
             where: { ledger: rpcEvent.ledger, log_index: logIndex },
           });
@@ -425,34 +304,28 @@ export class IndexerService implements OnModuleInit {
             alreadyIndexed++;
           } else {
             try {
-              const eventType =
-                rpcEvent.topic && rpcEvent.topic.length > 0
-                  ? rpcEvent.topic[0]
-                  : 'unknown';
-
-              const contractEvent = this.contractEventRepository.create({
-                ledger: rpcEvent.ledger,
-                log_index: logIndex,
-                event_type: eventType,
-                data: rpcEvent.value,
-                tx_hash: rpcEvent.txHash ?? null,
-                status: ContractEventStatus.PENDING,
-                retry_count: 0,
-              });
-
-              await this.contractEventRepository.save(contractEvent);
+              const eventType = rpcEvent.topic?.length ? rpcEvent.topic[0] : 'unknown';
+              await this.contractEventRepository.save(
+                this.contractEventRepository.create({
+                  ledger: rpcEvent.ledger,
+                  log_index: logIndex,
+                  event_type: eventType,
+                  data: rpcEvent.value,
+                  tx_hash: rpcEvent.txHash ?? null,
+                  status: ContractEventStatus.PENDING,
+                  retry_count: 0,
+                }),
+              );
               newlyProcessed++;
             } catch (err) {
               errors++;
-              this.logger.warn(
-                `Backfill failed for ledger ${rpcEvent.ledger}: ${(err as Error).message}`,
-              );
+              this.logger.warn(`Backfill failed for ledger ${rpcEvent.ledger}: ${(err as Error).message}`);
             }
           }
         }
 
         cursor = inRangeEvents.length > 0
-          ? Math.max(...inRangeEvents.map((e) => e.ledger)) + 1
+          ? Math.max(...inRangeEvents.map((event) => event.ledger)) + 1
           : toLedger + 1;
       }
     } catch (err) {
@@ -470,12 +343,7 @@ export class IndexerService implements OnModuleInit {
     } as BackfillResponseDto;
   }
 
-  // --- read APIs ----------------------------------------------------------
-
-  async getEvents(
-    status?: ContractEventStatus,
-    limit = BATCH_SIZE,
-  ): Promise<ContractEvent[]> {
+  async getEvents(status?: ContractEventStatus, limit = BATCH_SIZE): Promise<ContractEvent[]> {
     return this.contractEventRepository.find({
       where: status ? { status } : {},
       order: { ledger: 'DESC' },
@@ -485,17 +353,16 @@ export class IndexerService implements OnModuleInit {
 
   async getMetrics(): Promise<IndexerMetricsDto> {
     const now = Date.now();
-    this.eventTimestamps = this.eventTimestamps.filter((t) => now - t < 60_000);
-    const eventsPerMinute = this.eventTimestamps.length;
+    this.eventTimestamps = this.eventTimestamps.filter((timestamp) => now - timestamp < 60_000);
 
     return {
       eventsProcessed: this.eventsProcessed,
       depositsProcessed: this.depositsProcessed,
       withdrawalsProcessed: this.withdrawalsProcessed,
-      eventsPerMinute,
+      eventsPerMinute: this.eventTimestamps.length,
       lastProcessedAt: new Date(this.lastProcessedAt).toISOString(),
       uptimeSeconds: Math.floor((now - this.startTime) / 1000),
-    } as IndexerMetricsDto;
+    };
   }
 
   private recordProcessed(eventType: string): void {
@@ -510,8 +377,6 @@ export class IndexerService implements OnModuleInit {
     }
   }
 
-  // --- checkpoints --------------------------------------------------------
-
   private async getCheckpoint(key: string): Promise<number> {
     const record = await this.checkpointRepository.findOne({ where: { key } });
     return record ? Number(record.value) : 0;
@@ -520,9 +385,12 @@ export class IndexerService implements OnModuleInit {
   private async setCheckpoint(key: string, value: number): Promise<void> {
     let record = await this.checkpointRepository.findOne({ where: { key } });
     if (!record) {
-      record = this.checkpointRepository.create({ key, value: String(value) });
+      record = this.checkpointRepository.create({
+        key,
+        value,
+      });
     } else {
-      record.value = String(value);
+      record.value = value;
     }
     await this.checkpointRepository.save(record);
   }

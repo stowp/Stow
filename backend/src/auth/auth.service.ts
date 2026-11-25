@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Cron } from '@nestjs/schedule';
+import { TwoFactorService } from './two-factor/two-factor.service';
 import { randomBytes, randomUUID, createHash } from 'crypto';
 import { Keypair } from '@stellar/stellar-sdk';
 import {
@@ -71,6 +72,7 @@ export class AuthService implements OnModuleInit {
     private readonly authAuditEventsRepository: Repository<AuthAuditEvent>,
     @InjectRepository(WebAuthnCredential)
     private readonly webAuthnCredentialsRepository: Repository<WebAuthnCredential>,
+    private readonly twoFactorService: TwoFactorService,
   ) {}
 
   onModuleInit() {
@@ -150,6 +152,7 @@ export class AuthService implements OnModuleInit {
   async verifyChallenge(
     stellar_address: string,
     signed_challenge: string,
+    two_factor_code?: string,
   ): Promise<{
     access_token: string;
     refresh_token: string;
@@ -161,13 +164,34 @@ export class AuthService implements OnModuleInit {
       signed_challenge,
     );
 
-    const session = await this.createSession(user);
+    const session = await this.createSession(user, two_factor_code);
     return { ...session, user, is_new_user };
+  }
+
+  /**
+   * Requires a valid second factor when the user has 2FA enabled. Callers
+   * that cannot collect a code (passkey, OAuth) fail with TWO_FACTOR_REQUIRED.
+   */
+  async enforceTwoFactor(user: User, two_factor_code?: string): Promise<void> {
+    if (!(await this.twoFactorService.isEnabledFor(user.id))) {
+      return;
+    }
+    if (!two_factor_code) {
+      throw new UnauthorizedException('TWO_FACTOR_REQUIRED');
+    }
+    if (
+      !(await this.twoFactorService.verifyLoginCode(user.id, two_factor_code))
+    ) {
+      throw new UnauthorizedException('INVALID_TWO_FACTOR_CODE');
+    }
   }
 
   async createSession(
     user: User,
+    two_factor_code?: string,
   ): Promise<{ access_token: string; refresh_token: string }> {
+    await this.enforceTwoFactor(user, two_factor_code);
+
     // Sign JWT with sub: user.id
     const payload = { sub: user.id, stellar_address: user.stellar_address };
     const access_token = await this.jwtService.signAsync(payload);
@@ -494,6 +518,7 @@ export class AuthService implements OnModuleInit {
     if (!user) {
       throw new UnauthorizedException('User not found or has been deleted');
     }
+    await this.enforceTwoFactor(user);
 
     const payload = { sub: user.id, stellar_address: user.stellar_address };
     const access_token = await this.jwtService.signAsync(payload);

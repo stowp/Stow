@@ -709,6 +709,45 @@ describe('AuditLoggerService', () => {
       ]);
     });
 
+    it('applies every advertised filter to endpoint access patterns', async () => {
+      const { service, repository } = makeAuditService();
+      const from = new Date('2026-01-01');
+      const to = new Date('2026-02-01');
+
+      await service.getAccessPatterns({
+        userId: 'alice',
+        action: 'deposit%',
+        endpoint: '/savings/_',
+        method: 'post',
+        statusCode: 403,
+        ip: '::ffff:203.0.113.9',
+        from,
+        to,
+      });
+
+      const conditions = repository.builderCalls.filter(
+        ([name]) => name === 'andWhere',
+      );
+      expect(conditions).toEqual([
+        ['andWhere', 'log.user_id = :userId', { userId: 'alice' }],
+        ['andWhere', 'log.action ILIKE :action', { action: '%deposit\\%%' }],
+        [
+          'andWhere',
+          'log.endpoint ILIKE :endpoint',
+          { endpoint: '%/savings/\\_%' },
+        ],
+        ['andWhere', 'log.method = :method', { method: 'POST' }],
+        ['andWhere', 'log.status_code = :statusCode', { statusCode: 403 }],
+        [
+          'andWhere',
+          'log.ip_hash = :ipHash',
+          { ipHash: expect.stringMatching(/^[0-9a-f]{64}$/) },
+        ],
+        ['andWhere', 'log.created_at >= :from', { from }],
+        ['andWhere', 'log.created_at <= :to', { to }],
+      ]);
+    });
+
     it('clamps the number of endpoints returned', async () => {
       const { service, repository } = makeAuditService();
 

@@ -13,7 +13,7 @@ export class TwoFactorRecovery {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({ type: 'uuid' })
   userId: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
@@ -30,7 +30,7 @@ export class TwoFactorRecovery {
   isUsed: boolean;
 
   @Column({ nullable: true })
-  usedAt: Date;
+  usedAt: Date | null;
 
   @Column({ nullable: true })
   ipAddress: string;

@@ -40,6 +40,7 @@ use crate::events::{
     TOPIC_INTEREST_RATE_SET, TOPIC_INTEREST_WITHDRAW,
 };
 use crate::interest_tiers;
+use crate::profit_share;
 use crate::rewards;
 use crate::storage::{self, extend_instance_ttl};
 use crate::types::{CompoundFrequency, DataKey, InterestAccount};
@@ -219,7 +220,7 @@ pub fn deposit(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     let old_rate_bps = account.rate_bps;
-    let new_rate_bps = interest_tiers::effective_rate_bps(env, new_balance, 0);
+    let new_rate_bps = interest_tiers::rate_for(env, new_balance, 0, rate_bps(env));
     account.rate_bps = new_rate_bps;
 
     account.principal = new_balance;
@@ -242,6 +243,9 @@ pub fn deposit(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
         (TOPIC_INTEREST_DEPOSIT, owner.clone()),
         (owner, amount, account.principal, now),
     );
+
+    // Award any milestone boost NFTs the new principal qualifies for.
+    crate::boost::check_milestones(env, &account.owner, account.principal)?;
 
     Ok(())
 }
@@ -284,11 +288,15 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
         .checked_sub(amount)
         .ok_or(Error::Overflow)?;
 
+    // Collateral lock: an interest-bearing vault backing a loan cannot be
+    // withdrawn below the minimum locked balance for outstanding debt.
+    crate::collateral::check_withdrawal(env, &owner, new_principal)?;
+
     storage::transfer_out(env, &owner, amount)?;
 
     // Update the tiered rate based on the post-withdrawal balance.
     let old_rate_bps = account.rate_bps;
-    let new_rate_bps = interest_tiers::effective_rate_bps(env, new_principal, 0);
+    let new_rate_bps = interest_tiers::rate_for(env, new_principal, 0, rate_bps(env));
     account.rate_bps = new_rate_bps;
     account.principal = new_principal;
     account.updated_at = now;
@@ -345,7 +353,7 @@ pub fn claim(env: &Env, owner: Address) -> Result<i128, Error> {
 
     // Refresh tiered rate based on current principal after settlement.
     let old_rate_bps = account.rate_bps;
-    let new_rate_bps = interest_tiers::effective_rate_bps(env, account.principal, 0);
+    let new_rate_bps = interest_tiers::rate_for(env, account.principal, 0, rate_bps(env));
     account.rate_bps = new_rate_bps;
     account.updated_at = now;
 
@@ -368,6 +376,9 @@ pub fn claim(env: &Env, owner: Address) -> Result<i128, Error> {
         (TOPIC_INTEREST_CLAIMED, owner.clone()),
         (owner, credited, account.principal, now),
     );
+
+    // Crediting interest raised the principal — award any new milestones.
+    crate::boost::check_milestones(env, &account.owner, account.principal)?;
 
     Ok(credited)
 }
@@ -407,13 +418,25 @@ pub fn accrued(env: &Env, owner: Address) -> Result<i128, Error> {
     let compounded = compound(
         env,
         account.principal,
-        account.rate_bps,
+        effective_rate_bps(env, &account),
         account.frequency.periods_per_year(),
         periods,
     )?;
     compounded
         .checked_sub(account.principal)
         .ok_or(Error::Overflow)
+}
+
+/// Effective annual rate applied to `account`: its snapshot base rate plus
+/// the stacked boost from every boost NFT the owner currently holds, capped
+/// at [`MAX_INTEREST_BPS`]. The boost is read live from the boost-NFT
+/// contract (so it follows transfers); it is `0` when no boost-NFT contract
+/// is configured.
+fn effective_rate_bps(env: &Env, account: &InterestAccount) -> u32 {
+    account
+        .rate_bps
+        .saturating_add(crate::boost::total_boost_bps(env, &account.owner))
+        .min(MAX_INTEREST_BPS)
 }
 
 /// Compound `account.principal` over the whole periods elapsed since
@@ -431,7 +454,7 @@ fn settle(env: &Env, account: &mut InterestAccount, now: u64) -> Result<i128, Er
     let compounded = compound(
         env,
         account.principal,
-        account.rate_bps,
+        effective_rate_bps(env, account),
         account.frequency.periods_per_year(),
         periods,
     )?;
@@ -445,7 +468,72 @@ fn settle(env: &Env, account: &mut InterestAccount, now: u64) -> Result<i128, Er
 
     account.principal = compounded;
     account.last_compound_at = advanced;
+
+    // Profit sharing (#642): earmark newly credited interest for the owner's
+    // stakeholders, if any are configured.
+    profit_share::record_earned(env, &account.owner, credited)?;
     Ok(credited)
+}
+
+/// Settle accrued interest on `owner`'s account and persist it, without
+/// requiring the owner's auth. Used by `profit_share::distribute` so that a
+/// distribution always includes interest accrued up to now.
+///
+/// Errors: `NotFound` if the account does not exist, `Overflow`.
+pub(crate) fn settle_account(env: &Env, owner: &Address) -> Result<InterestAccount, Error> {
+    let key = DataKey::InterestAccount(owner.clone());
+    let mut account: InterestAccount = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
+    let now = env.ledger().timestamp();
+    settle(env, &mut account, now)?;
+    account.frequency = frequency(env);
+    account.updated_at = now;
+    env.storage().persistent().set(&key, &account);
+    storage::extend_persistent_ttl(env, &key);
+    Ok(account)
+}
+
+/// Remove `amount` of already-settled interest from `owner`'s principal so it
+/// can be paid out to profit-share stakeholders. Refreshes the tiered rate
+/// for the reduced balance. The caller performs the token transfers.
+///
+/// Errors: `NotFound`, `InsufficientBalance` if `amount` exceeds the
+/// principal, `Overflow`, plus collateral-lock errors.
+pub(crate) fn debit_for_profit_share(
+    env: &Env,
+    owner: &Address,
+    amount: i128,
+) -> Result<i128, Error> {
+    let key = DataKey::InterestAccount(owner.clone());
+    let mut account: InterestAccount = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
+    if amount > account.principal {
+        return Err(Error::InsufficientBalance);
+    }
+    let new_principal = account
+        .principal
+        .checked_sub(amount)
+        .ok_or(Error::Overflow)?;
+    crate::collateral::check_withdrawal(env, owner, new_principal)?;
+
+    let old_rate_bps = account.rate_bps;
+    let new_rate_bps = interest_tiers::effective_rate_bps(env, new_principal, 0);
+    account.rate_bps = new_rate_bps;
+    account.principal = new_principal;
+    account.updated_at = env.ledger().timestamp();
+    env.storage().persistent().set(&key, &account);
+    storage::extend_persistent_ttl(env, &key);
+
+    if new_rate_bps != old_rate_bps {
+        interest_tiers::emit_rate_changed(env, owner, old_rate_bps, new_rate_bps, new_principal, 0);
+    }
+    Ok(new_principal)
 }
 
 /// Compound `principal` over `periods` whole periods at `rate_bps` annual,

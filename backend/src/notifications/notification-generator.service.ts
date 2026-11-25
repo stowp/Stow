@@ -81,6 +81,144 @@ export class NotificationGeneratorService {
   }
 
   /**
+   * A savings goal reached a milestone (25%, 50%, 75% of target).
+   *
+   * Delivery rules:
+   * 1. Look up the owner's User row by Stellar address.
+   * 2. Check `UserPreferences.goal_milestone_notifications` opt-out.
+   * 3. Only notify once per milestone by checking for existing notifications.
+   */
+  async handleGoalMilestone(data: {
+    goalId: string;
+    owner: string;
+    name: string;
+    currentAmount: string;
+    targetAmount: string;
+    milestonePercent: number;
+  }): Promise<void> {
+    // --- 1. Resolve the user UUID from their Stellar address ----------------
+    const user = await this.userRepository.findOne({
+      where: { stellar_address: data.owner },
+    });
+
+    // --- 2. Respect the goal_milestone_notifications opt-out preference -----
+    if (user) {
+      const prefs = await this.userPreferencesRepository.findOne({
+        where: { userId: user.id },
+      });
+      if (prefs && !prefs.goal_milestone_notifications) {
+        this.logger.debug(
+          `handleGoalMilestone: user ${user.id} has opted out of goal_milestone notifications; skipping`,
+        );
+        return;
+      }
+    }
+
+    // --- 3. Idempotency: skip if we already notified for this milestone -----
+    const existing = await this.notificationsRepository.findOne({
+      where: {
+        type: NotificationType.GoalMilestone,
+        data: {
+          goal_id: data.goalId,
+          milestone_percent: data.milestonePercent,
+        } as any,
+      },
+    });
+    if (existing) {
+      this.logger.debug(
+        `handleGoalMilestone: goal ${data.goalId} milestone ${data.milestonePercent}% already notified; skipping`,
+      );
+      return;
+    }
+
+    // --- 4. Create the milestone notification -------------------------------
+    const progressEmoji =
+      data.milestonePercent === 25
+        ? '🌱'
+        : data.milestonePercent === 50
+          ? '🌿'
+          : '🌳';
+
+    await this.notificationsService.create(
+      data.owner,
+      NotificationType.GoalMilestone,
+      `${data.milestonePercent}% to your goal! ${progressEmoji}`,
+      `Your goal "${data.name}" is now ${data.milestonePercent}% complete. Keep going!`,
+      {
+        goal_id: data.goalId,
+        milestone_percent: data.milestonePercent,
+        current_amount: data.currentAmount,
+        target_amount: data.targetAmount,
+      },
+      user?.id,
+    );
+
+    this.logger.log(
+      `handleGoalMilestone: notification created for owner=${data.owner} goal=${data.goalId} milestone=${data.milestonePercent}%`,
+    );
+  }
+
+  /**
+   * A contribution was made to a savings goal.
+   *
+   * Delivery rules:
+   * 1. Look up the owner's User row by Stellar address.
+   * 2. Check `UserPreferences.goal_contribution_notifications` opt-out.
+   * 3. Create a notification with contribution details.
+   */
+  async handleGoalContribution(data: {
+    goalId: string;
+    owner: string;
+    name: string;
+    contributionAmount: string;
+    currentAmount: string;
+    targetAmount: string;
+  }): Promise<void> {
+    // --- 1. Resolve the user UUID from their Stellar address ----------------
+    const user = await this.userRepository.findOne({
+      where: { stellar_address: data.owner },
+    });
+
+    // --- 2. Respect the goal_contribution_notifications opt-out preference --
+    if (user) {
+      const prefs = await this.userPreferencesRepository.findOne({
+        where: { userId: user.id },
+      });
+      if (prefs && !prefs.goal_contribution_notifications) {
+        this.logger.debug(
+          `handleGoalContribution: user ${user.id} has opted out of goal_contribution notifications; skipping`,
+        );
+        return;
+      }
+    }
+
+    // --- 3. Calculate progress percentage -----------------------------------
+    const current = BigInt(data.currentAmount);
+    const target = BigInt(data.targetAmount);
+    const progressPercent = target > 0n ? Number((current * 100n) / target) : 0;
+
+    // --- 4. Create the contribution notification ----------------------------
+    await this.notificationsService.create(
+      data.owner,
+      NotificationType.GoalContribution,
+      'Goal contribution received! 💰',
+      `${data.contributionAmount} stroops added to your goal "${data.name}". You're now ${progressPercent}% of the way there!`,
+      {
+        goal_id: data.goalId,
+        contribution_amount: data.contributionAmount,
+        current_amount: data.currentAmount,
+        target_amount: data.targetAmount,
+        progress_percent: progressPercent,
+      },
+      user?.id,
+    );
+
+    this.logger.log(
+      `handleGoalContribution: notification created for owner=${data.owner} goal=${data.goalId} amount=${data.contributionAmount}`,
+    );
+  }
+
+  /**
    * A harvest credited yield to the pool's depositors.
    *
    * Triggered off the indexed `harvested` event. Each depositor is notified
@@ -123,7 +261,8 @@ export class NotificationGeneratorService {
       }
 
       // Proportion the yield to the depositor's share at harvest time.
-      const earned = (totalYield * BigInt(Math.round(depositor.share * 1e6))) / 1_000_000n;
+      const earned =
+        (totalYield * BigInt(Math.round(depositor.share * 1e6))) / 1_000_000n;
       if (earned <= 0n) {
         continue;
       }
@@ -165,7 +304,10 @@ export class NotificationGeneratorService {
   }): Promise<void> {
     // --- 1. Only notify once the cooldown has actually elapsed --------------
     const claimableAt = new Date(data.claimableAt);
-    if (Number.isNaN(claimableAt.getTime()) || claimableAt.getTime() > Date.now()) {
+    if (
+      Number.isNaN(claimableAt.getTime()) ||
+      claimableAt.getTime() > Date.now()
+    ) {
       this.logger.debug(
         `handleWithdrawalReady: request ${data.requestId} not yet claimable; skipping`,
       );
@@ -237,7 +379,9 @@ export class NotificationGeneratorService {
   }): Promise<void> {
     const owner = data.owner ?? data.user ?? data.account;
     if (!owner) {
-      this.logger.debug('handleDepositReceived: missing owner address; skipping');
+      this.logger.debug(
+        'handleDepositReceived: missing owner address; skipping',
+      );
       return;
     }
 
@@ -268,7 +412,9 @@ export class NotificationGeneratorService {
       {
         amount: data.amount,
         ...(data.asset ? { asset: data.asset } : {}),
-        ...(data.transactionHash ? { transaction_hash: data.transactionHash } : {}),
+        ...(data.transactionHash
+          ? { transaction_hash: data.transactionHash }
+          : {}),
       },
       user?.id,
     );
@@ -319,7 +465,9 @@ export class NotificationGeneratorService {
     settledShare?: string;
     [key: string]: unknown;
   }): Promise<void> {
-    const groupId = String(data.groupId ?? data.id ?? data.group_id ?? 'unknown');
+    const groupId = String(
+      data.groupId ?? data.id ?? data.group_id ?? 'unknown',
+    );
     const groupName = data.groupName ?? data.name;
 
     const membersList: Array<{ address: string; shareText: string }> = [];
@@ -364,7 +512,9 @@ export class NotificationGeneratorService {
       }
 
       // --- 3. Create the notification per member ------------------------------
-      const groupLabel = groupName ? `"${groupName}"` : `Group pool #${groupId}`;
+      const groupLabel = groupName
+        ? `"${groupName}"`
+        : `Group pool #${groupId}`;
       await this.notificationsService.create(
         member.address,
         NotificationType.GroupSettled,

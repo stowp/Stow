@@ -219,6 +219,14 @@ class EnvironmentVariables {
   @IsString()
   AUDIT_LOG_ENCRYPTION_KEY?: string;
 
+  /**
+   * 32-byte key (64 hex characters) that encrypts stored TOTP secrets. Required
+   * once two-factor authentication is used; setup fails without it.
+   */
+  @IsOptional()
+  @IsString()
+  TWO_FACTOR_ENCRYPTION_KEY?: string;
+
   /** Days to keep audit logs before they are purged. Defaults to 365. */
   @IsOptional()
   @IsString()
@@ -269,6 +277,37 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   GITHUB_CLIENT_SECRET?: string;
+
+  // Partner Roundup API (#647)
+  /** Requests per window per partner (default 60). */
+  @IsOptional()
+  @IsNumber()
+  PARTNER_ROUNDUP_THROTTLE_LIMIT?: number;
+
+  /** Rate-limit window length in ms per partner (default 60 000). */
+  @IsOptional()
+  @IsNumber()
+  PARTNER_ROUNDUP_THROTTLE_TTL_MS?: number;
+
+  /** Minor-unit boundary for rounding (default 10 000 000 = $1 in stroops). */
+  @IsOptional()
+  @IsNumber()
+  PARTNER_ROUNDUP_UNIT?: number;
+
+  /** Maximum roundup per transaction in minor units (default 100 000 000 = $10 in stroops). */
+  @IsOptional()
+  @IsNumber()
+  PARTNER_ROUNDUP_MAX_AMOUNT?: number;
+
+  /** Global fallback webhook URL for partner callbacks. */
+  @IsOptional()
+  @IsString()
+  PARTNER_WEBHOOK_URL?: string;
+
+  /** Global HMAC secret for signing partner webhook callbacks. */
+  @IsOptional()
+  @IsString()
+  PARTNER_WEBHOOK_SECRET?: string;
 }
 
 export function validate(config: Record<string, unknown>) {

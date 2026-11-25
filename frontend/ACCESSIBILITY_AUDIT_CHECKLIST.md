@@ -3,6 +3,12 @@
 ## Overview
 This checklist helps ensure the Stow application meets WCAG 2.1 Level AA standards and provides an inclusive experience for all users.
 
+### Savings dashboard screen-reader support
+The savings dashboard includes a skip-to-main-content link, focus movement to the main
+landmark after client-side route changes, live announcements for summary and account
+updates, and text descriptions for the portfolio allocation and projected growth charts.
+These changes support the checklist items below but do not replace a full manual audit.
+
 ---
 
 ## 1. Keyboard Navigation

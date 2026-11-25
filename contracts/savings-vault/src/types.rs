@@ -1,5 +1,10 @@
 use soroban_sdk::{contracttype, Address, BytesN, Map, String, Vec};
 
+// NOTE(#648): the `boost-nft` sibling crate is WIP and not yet publishable.
+// DataKey::BoostNft and DataKey::BoostState, plus the `BoostState` struct and
+// the `Tier` enum, will be added here once boost-nft lands. For now they are
+// omitted so types.rs compiles on this branch.
+
 // ---------------------------------------------------------------------------
 // Rewards (new for #440)
 // ---------------------------------------------------------------------------
@@ -70,6 +75,54 @@ pub struct FlexibleAccount {
     pub updated_at: u64,
 }
 
+/// Interval used by a recurring deposit. Monthly means a fixed 30-day period.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecurringFrequency {
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl RecurringFrequency {
+    pub fn seconds(self) -> u64 {
+        match self {
+            Self::Daily => 86_400,
+            Self::Weekly => 604_800,
+            Self::Monthly => 2_592_000,
+        }
+    }
+}
+
+/// One recurring wallet deposit schedule per owner.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecurringDeposit {
+    pub owner: Address,
+    pub amount: i128,
+    pub frequency: RecurringFrequency,
+    /// Ledger timestamp at or after which the next deposit may execute.
+    pub next_execution: u64,
+}
+
+/// A pending threshold-approved withdrawal from a group pool.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupWithdrawalRequest {
+    pub id: u64,
+    pub group_id: u64,
+    pub requester: Address,
+    pub recipient: Address,
+    pub amount: i128,
+    /// Number of distinct group-member approvals required for execution.
+    pub threshold: u32,
+    /// Distinct member approvals received so far.
+    pub approvers: Vec<Address>,
+    pub expires_at: u64,
+    pub rejected: bool,
+    pub executed: bool,
+}
+
 /// A locked savings plan: funds cannot be withdrawn until `unlock_at`.
 #[contracttype]
 #[derive(Clone)]
@@ -79,6 +132,92 @@ pub struct LockedPlan {
     pub balance: i128,
     /// Ledger timestamp after which withdrawal is permitted.
     pub unlock_at: u64,
+    pub created_at: u64,
+}
+
+/// Auto-rollover settings for a locked plan (#638).
+///
+/// At maturity (`now >= plan.unlock_at`) the plan's balance plus accrued
+/// interest is moved into a brand-new locked plan, and the original plan is
+/// closed with a zero balance.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RolloverConfig {
+    pub plan_id: u64,
+    pub owner: Address,
+    /// Lock period of the new plan, in seconds. `0` reuses the original
+    /// plan's term (`unlock_at - created_at`).
+    pub lock_period: u64,
+    pub enabled_at: u64,
+}
+
+/// One heir in an owner's inheritance plan (#635).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Beneficiary {
+    pub address: Address,
+    /// Share of the owner's flexible balance, in basis points. All shares in
+    /// a plan sum to exactly `10_000`.
+    pub share_bps: u32,
+    /// Amount already paid out to this beneficiary, in stroops.
+    pub claimed: i128,
+}
+
+/// Inheritance plan for an owner's flexible savings (#635).
+///
+/// Access unlocks gradually:
+/// 1. While the owner is active (`now < last_active_at + inactivity_period`)
+///    beneficiaries cannot claim anything.
+/// 2. Once the owner has been inactive for `inactivity_period`, each
+///    beneficiary may claim `partial_access_bps` of their share.
+/// 3. When the `verifier` attests a proof of death, the remainder of every
+///    share unlocks. Plans without a verifier unlock in full at step 2.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct InheritancePlan {
+    pub owner: Address,
+    pub beneficiaries: Vec<Beneficiary>,
+    /// Seconds of owner inactivity after which access starts to unlock.
+    pub inactivity_period: u64,
+    /// Ledger timestamp of the owner's last recorded activity.
+    pub last_active_at: u64,
+    /// Portion of each share (bps) claimable before proof of death.
+    pub partial_access_bps: u32,
+    /// Trusted party that attests proof of death. `None` means no proof
+    /// is required.
+    pub verifier: Option<Address>,
+    /// Hash of the attested proof-of-death document, once verified.
+    pub proof_hash: Option<BytesN<32>>,
+    /// Ledger timestamp at which the proof was attested.
+    pub proof_verified_at: Option<u64>,
+    /// Flexible balance frozen at the first claim; every share is computed
+    /// against it so payout order cannot change what anyone receives.
+    pub snapshot_balance: Option<i128>,
+    pub created_at: u64,
+}
+
+/// A condition gating an automated withdrawal from a flexible account (#639).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum WithdrawalCondition {
+    /// Withdraw once the oracle price of `asset` is strictly greater than
+    /// `threshold` (in the oracle's price units).
+    PriceAbove(Address, i128),
+    /// Withdraw once the ledger timestamp reaches the given value.
+    AfterDate(u64),
+    /// Withdraw once the flexible account balance is strictly greater than
+    /// the given amount, in token stroops.
+    BalanceAbove(i128),
+}
+
+/// A pending conditional withdrawal: `amount` is paid to `owner` from their
+/// flexible account once `condition` holds.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConditionalWithdrawalRule {
+    pub owner: Address,
+    pub condition: WithdrawalCondition,
+    pub amount: i128,
     pub created_at: u64,
 }
 
@@ -242,6 +381,24 @@ pub struct UpgradeProposal {
     pub execute_after: u64,
 }
 
+/// Snapshot of the state before the most recent `execute_upgrade`, kept in
+/// instance storage under `DataKey::PreviousVersion` to enable a one-step
+/// rollback via `rollback_upgrade`.
+///
+/// Cleared by `rollback_upgrade` so only a single rollback level is
+/// supported per upgrade cycle. After rollback, a fresh `propose_upgrade` →
+/// `execute_upgrade` sequence must be used for further changes.
+#[contracttype]
+#[derive(Clone)]
+pub struct PreviousVersionSnapshot {
+    /// The Wasm hash that was installed as part of the upgrade we may roll
+    /// back from. Used to re-install the Wasm on rollback.
+    pub wasm_hash: BytesN<32>,
+    /// The version number before the upgrade (i.e. what `Version` will be
+    /// restored to on rollback).
+    pub version: u32,
+}
+
 /// An approved insurance claim that a user can redeem.
 #[contracttype]
 #[derive(Clone)]
@@ -252,6 +409,296 @@ pub struct InsuranceClaimRecord {
     pub redeemed: bool,
 }
 
+/// Permission level granted to a delegate for savings management.
+///
+/// Variants are ordered by capability: `ViewOnly < Deposit < Full`, so a
+/// derived `Ord` comparison ("does this level include that level?") matches
+/// the intuitive hierarchy. See [`crate::delegation`].
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum PermissionLevel {
+    /// Read-only access to the owner's savings accounts.
+    ViewOnly,
+    /// Can deposit into the owner's flexible account on the owner's behalf.
+    /// Withdrawals are not permitted.
+    Deposit,
+    /// Full management: deposit and withdraw. Withdrawals are always sent to
+    /// the **owner's** wallet, never the delegate's.
+    Full,
+}
+
+/// A savings delegation: an owner authorizes a delegate to manage savings on
+/// their behalf at a given [`PermissionLevel`], optionally expiring at a
+/// ledger timestamp.
+///
+/// See [`crate::delegation`] for the full lifecycle (grant, update, revoke,
+/// and delegated deposit/withdraw).
+#[contracttype]
+#[derive(Clone)]
+pub struct Delegation {
+    /// The savings owner who granted this delegation.
+    pub owner: Address,
+    /// The authorized delegate address.
+    pub delegate: Address,
+    /// What the delegate is allowed to do.
+    pub level: PermissionLevel,
+    /// Ledger timestamp after which the delegation is no longer valid.
+    /// `None` means the delegation never expires on its own.
+    pub expires_at: Option<u64>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// The set of admin actions that must pass through the timelock.
+///
+/// Each variant carries exactly the parameters that the underlying admin
+/// function needs, so `execute_action` can apply it without any extra
+/// context. `set_paused` is intentionally not timelocked: an emergency pause
+/// must take effect immediately.
+#[contracttype]
+#[derive(Clone)]
+pub enum TimelockAction {
+    /// Rotate the admin key. Equivalent to `set_admin(new_admin)`.
+    SetAdmin(Address),
+    /// Swap the contract Wasm. Equivalent to `upgrade(new_wasm_hash)`.
+    Upgrade(BytesN<32>),
+    /// Change the per-account deposit cap (in stroops). `0` = unlimited.
+    SetDepositCap(i128),
+    /// Change the minimum deposit (in stroops). `0` = no minimum.
+    SetMinDeposit(i128),
+    /// Change the early-withdrawal penalty, in basis points.
+    SetEarlyWithdrawPenaltyBps(u32),
+    /// Change the address that receives early-withdrawal penalties.
+    SetPenaltyRecipient(Address),
+    /// Change the minimum lock period before early withdrawal, in seconds.
+    SetMinLockPeriod(u64),
+    /// Change the annual interest rate, in basis points.
+    SetInterestRate(u32),
+    /// Change the compounding frequency for interest accounts.
+    SetInterestFrequency(CompoundFrequency),
+    /// Change the timelock delay itself, in seconds.
+    SetTimelockDelay(u64),
+}
+
+/// Lifecycle state of a queued action.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ActionStatus {
+    /// Waiting to reach the ETA (or already past it but not yet executed).
+    Pending,
+    /// Successfully applied by `execute_action`.
+    Executed,
+    /// Cancelled by the admin before execution.
+    Cancelled,
+}
+
+/// A pending (or completed) timelock entry.
+///
+/// Stored under [`DataKey::QueuedAction(id)`] in persistent storage.
+#[contracttype]
+#[derive(Clone)]
+pub struct QueuedAction {
+    /// Unique monotonic id allocated by [`DataKey::NextTimelockId`].
+    pub id: u64,
+    /// The action payload to apply at execution time.
+    pub action: TimelockAction,
+    /// Ledger timestamp before which `execute_action` is rejected
+    /// (`Error::TimelockNotReady`).
+    pub eta: u64,
+    /// Ledger timestamp after which `execute_action` is rejected
+    /// (`Error::TimelockExpired`).
+    pub expires_at: u64,
+    /// Current lifecycle state.
+    pub status: ActionStatus,
+    /// Ledger timestamp when this entry was queued.
+    pub queued_at: u64,
+}
+
+/// What a challenge participant must achieve by the deadline to win a prize.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ChallengeKind {
+    /// Total amount saved (stroops) must reach `target_amount`.
+    TotalSaved,
+    /// Number of separate deposits must reach `target_amount`.
+    Consistency,
+    /// Amount saved, in basis points of the entry stake, must reach `target_amount`.
+    GrowthRate,
+}
+
+/// Lifecycle state of a [`Challenge`].
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ChallengeStatus {
+    /// Accepting joins and savings until the deadline.
+    Open,
+    /// Every participant has settled; no funds remain to be claimed.
+    Closed,
+}
+
+/// One participant's record inside a [`Challenge`].
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChallengeParticipant {
+    pub address: Address,
+    /// Total stroops saved toward the challenge target so far.
+    pub saved: i128,
+    /// Number of separate `save` calls made by this participant.
+    pub deposits: u32,
+    /// Entry stake paid when joining (always `== challenge.entry_fee`).
+    pub fee_paid: i128,
+    /// Set once the participant has called `settle`.
+    pub settled: bool,
+}
+
+/// A savings challenge with an entry stake, a target and a deadline.
+///
+/// Stored under [`DataKey::Challenge(id)`] in persistent storage.
+#[contracttype]
+#[derive(Clone)]
+pub struct Challenge {
+    pub id: u64,
+    pub creator: Address,
+    pub kind: ChallengeKind,
+    /// Success threshold; its unit depends on `kind` (see [`ChallengeKind`]).
+    pub target_amount: i128,
+    /// Stroops each participant stakes to join.
+    pub entry_fee: i128,
+    /// Ledger timestamp after which joins and saves stop and settlement opens.
+    pub deadline: u64,
+    /// Minimum participants required before any prize is paid out.
+    pub min_participants: u32,
+    /// Protocol fee rate, in basis points, snapshotted at creation. Each
+    /// participant's fee funds the prize pool.
+    pub fee_bps: u32,
+    pub status: ChallengeStatus,
+    pub participants: Vec<ChallengeParticipant>,
+    pub created_at: u64,
+}
+
+/// Rounding granularity for automatic savings round-ups (#622).
+///
+/// Each external transaction is rounded up to the next multiple of this step;
+/// the difference is saved.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum RoundupLevel {
+    /// Round to the nearest 1 unit: nothing is saved.
+    Nearest1,
+    /// Round up to the next multiple of 5.
+    Nearest5,
+    /// Round up to the next multiple of 10.
+    Nearest10,
+}
+
+/// An owner's round-up configuration and running totals.
+///
+/// Stored under [`DataKey::Roundup(owner)`] in persistent storage.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoundupConfig {
+    pub owner: Address,
+    pub level: RoundupLevel,
+    /// Whether round-ups are currently on. Disabled configs keep their totals.
+    pub enabled: bool,
+    /// Sum of all external transaction amounts tracked so far, in stroops.
+    pub tracked_total: i128,
+    /// Sum of all round-up amounts deposited so far, in stroops.
+    pub deposited_total: i128,
+    /// Sum of round-up amounts skipped because the owner's token balance
+    /// could not cover them, in stroops.
+    pub skipped_total: i128,
+}
+
+// ---------------------------------------------------------------------------
+// Loan collateral (#645)
+// ---------------------------------------------------------------------------
+
+/// Per-vault collateral state, stored under `DataKey::CollateralState(owner)`.
+///
+/// `max_borrow = balance * borrow_ratio_bps / 10_000` (rounded down).
+/// Liquidation allowed when `borrowed * 10_000 > balance * liquidation_ratio_bps`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollateralState {
+    pub owner: Address,
+    /// Whether this vault is currently enabled as collateral.
+    pub enabled: bool,
+    /// The loan id this vault is backing. `0` means not currently backing any loan.
+    pub loan_id: u64,
+    /// Amount currently borrowed against this vault, in token stroops.
+    pub borrowed: i128,
+    /// Collateral borrow ratio in basis points (e.g. 8_000 = 80 %).
+    pub borrow_ratio_bps: u32,
+    /// Liquidation threshold in basis points (e.g. 9_000 = 90 %).
+    pub liquidation_ratio_bps: u32,
+}
+
+/// A loan record, stored under `DataKey::LoanRecord(loan_id)`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanRecord {
+    pub loan_id: u64,
+    /// The registered lender that created this loan.
+    pub lender: Address,
+    /// Total amount borrowed against all vaults backing this loan.
+    pub total_borrowed: i128,
+    /// Owner addresses of the vaults backing this loan.
+    pub vaults: Vec<Address>,
+    pub created_at: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Inheritance (#439)
+// ---------------------------------------------------------------------------
+
+/// A single beneficiary in an inheritance plan, with their share.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Beneficiary {
+    /// Address that will receive funds when the inheritance is claimed.
+    pub address: Address,
+    /// Share of the balance in basis points. All shares must sum to `10_000`.
+    pub share_bps: u32,
+}
+
+/// An inheritance plan for a flexible savings account.
+/// Stored under `DataKey::Inheritance(owner)`.
+#[contracttype]
+#[derive(Clone)]
+pub struct InheritancePlan {
+    pub owner: Address,
+    /// Ordered list of beneficiaries. Shares must sum to `10_000` bps.
+    pub beneficiaries: Vec<Beneficiary>,
+    /// Seconds of inactivity before beneficiaries may claim. `0` disables inheritance.
+    pub inactivity_timeout: u64,
+    /// Ledger timestamp of the owner's most recent deposit or withdrawal.
+    pub last_active_at: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Tiered interest rates (#619)
+// ---------------------------------------------------------------------------
+
+/// Admin-configurable tiered interest-rate parameters, in basis points.
+/// Stored under `DataKey::TieredRateConfig` in instance storage.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TieredRateConfig {
+    /// Annual rate for balances strictly below 1 000 token units.
+    pub tier_low_rate_bps: u32,
+    /// Annual rate for balances at or above 1 000 and below 10 000 token units.
+    pub tier_mid_rate_bps: u32,
+    /// Annual rate for balances at or above 10 000 token units.
+    pub tier_high_rate_bps: u32,
+    /// Additional bps for lock periods >= 3 months but < 6 months.
+    pub lock_3mo_bonus_bps: u32,
+    /// Additional bps for lock periods >= 6 months but < 12 months.
+    pub lock_6mo_bonus_bps: u32,
+    /// Additional bps for lock periods >= 12 months.
+    pub lock_12mo_bonus_bps: u32,
+}
+
 /// Storage keys. One variant per logical record family.
 ///
 /// See `storage` module docs for the full storage model: durability
@@ -259,7 +706,7 @@ pub struct InsuranceClaimRecord {
 /// Every variant below is documented with its durability + TTL at a glance;
 /// treat the `storage` module doc as the canonical source if the two ever
 /// disagree.
-#[contracttype]
+#[contracttype(export = false)]
 #[derive(Clone)]
 pub enum DataKey {
     /// Global config / initialization guard.
@@ -404,6 +851,12 @@ pub enum DataKey {
     PendingUpgrade,
     /// Minimum delay (in seconds) before a proposed upgrade can execute.
     UpgradeDelay,
+    /// Rollback snapshot: stores `PreviousVersionSnapshot`. Written by
+    /// `execute_upgrade`, cleared by `rollback_upgrade`.
+    ///
+    /// Durability: instance — single small record, same lifecycle as
+    /// `PendingUpgrade`. Absent when no rollback is available.
+    PreviousVersion,
 
     // --- Insurance fund (#435) ---
     /// Insurance fund pool balance.
@@ -427,5 +880,64 @@ pub enum DataKey {
     /// Durability: persistent — kept out of the `Group` record so
     /// contributing does not grow it. TTL: bumped on every read/write.
     GroupContribution(u64, Address),
-}
 
+    /// Reward state by owner.
+    RewardState(Address),
+    /// Reward pool balance, in stroops.
+    RewardPoolBalance,
+    /// Admin-configured rewards parameters.
+    RewardsConfig,
+    /// Fee rate in basis points.
+    FeeBps,
+    /// Address that receives protocol fees.
+    FeeRecipient,
+    /// Delegation by (owner, delegate).
+    Delegation(Address, Address),
+    /// Admin-configured timelock delay, in seconds.
+    TimelockDelay,
+    /// Monotonic counter for queued-action ids.
+    NextTimelockId,
+    /// Queued timelock action by id.
+    QueuedAction(u64),
+    /// Savings challenge by id.
+    Challenge(u64),
+    /// Monotonic counter for challenge ids.
+    NextChallengeId,
+
+    /// Savings round-up configuration and totals by owner.
+    Roundup(Address),
+    /// A recurring deposit schedule keyed by its owner.
+    ///
+    /// Durability: persistent — one entry per owner. TTL is refreshed on
+    /// setup, query, execution, and cancellation.
+    RecurringDeposit(Address),
+    /// Pending multi-signature group withdrawal by request id.
+    GroupWithdrawal(u64),
+    /// Monotonic counter for multi-signature group withdrawal request ids.
+    NextGroupWithdrawalId,
+
+    // --- Locked rollover (#638) ---
+    /// `RolloverConfig` for a locked plan id. Absent means no auto-rollover.
+    ///
+    /// Durability: persistent — one entry per plan. TTL: bumped on every
+    /// read/write via `extend_persistent_ttl`.
+    Rollover(u64),
+
+    // --- Conditional withdrawals (#639) ---
+    /// Admin-configured price oracle used by price-based conditions.
+    ///
+    /// Durability: instance. TTL: bumped alongside the rest of instance storage.
+    PriceOracle,
+    /// Pending `ConditionalWithdrawalRule` for a flexible account owner.
+    ///
+    /// Durability: persistent — one entry per owner. TTL: bumped on every
+    /// read/write via `extend_persistent_ttl`.
+    WithdrawalCondition(Address),
+
+    // --- Inheritance planning (#635) ---
+    /// `InheritancePlan` for an owner. Absent means no plan.
+    ///
+    /// Durability: persistent — one entry per owner. TTL: bumped on every
+    /// read/write via `extend_persistent_ttl`.
+    Inheritance(Address),
+}

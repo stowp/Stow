@@ -333,9 +333,40 @@ export class AuditLoggerService {
       .orderBy('requests', 'DESC')
       .limit(Math.min(100, Math.max(1, Math.floor(top) || 20)));
 
-    if (filters.userId) query.andWhere('log.user_id = :userId', filters);
-    if (filters.from) query.andWhere('log.created_at >= :from', filters);
-    if (filters.to) query.andWhere('log.created_at <= :to', filters);
+    if (filters.userId) {
+      query.andWhere('log.user_id = :userId', { userId: filters.userId });
+    }
+    if (filters.action) {
+      query.andWhere('log.action ILIKE :action', {
+        action: `%${escapeLike(filters.action)}%`,
+      });
+    }
+    if (filters.endpoint) {
+      query.andWhere('log.endpoint ILIKE :endpoint', {
+        endpoint: `%${escapeLike(filters.endpoint)}%`,
+      });
+    }
+    if (filters.method) {
+      query.andWhere('log.method = :method', {
+        method: filters.method.toUpperCase(),
+      });
+    }
+    if (filters.statusCode !== undefined) {
+      query.andWhere('log.status_code = :statusCode', {
+        statusCode: filters.statusCode,
+      });
+    }
+    if (filters.ip) {
+      query.andWhere('log.ip_hash = :ipHash', {
+        ipHash: this.hashIp(normalizeIp(filters.ip)),
+      });
+    }
+    if (filters.from) {
+      query.andWhere('log.created_at >= :from', { from: filters.from });
+    }
+    if (filters.to) {
+      query.andWhere('log.created_at <= :to', { to: filters.to });
+    }
 
     const rows = await query.getRawMany<{
       method: string | null;

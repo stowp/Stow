@@ -38,7 +38,9 @@ pub fn set_premium_bps(env: &Env, caller: Address, bps: u32) -> Result<(), Error
         return Err(Error::InvalidParameters);
     }
 
-    env.storage().instance().set(&DataKey::InsurancePremiumBps, &bps);
+    env.storage()
+        .instance()
+        .set(&DataKey::InsurancePremiumBps, &bps);
 
     env.events().publish(
         (TOPIC_INSURANCE_PREMIUM_SET,),
@@ -176,7 +178,11 @@ pub fn approve_claim(
     }
 
     let key = DataKey::InsuranceClaim(claimant.clone());
-    if let Some(existing) = env.storage().persistent().get::<_, InsuranceClaimRecord>(&key) {
+    if let Some(existing) = env
+        .storage()
+        .persistent()
+        .get::<_, InsuranceClaimRecord>(&key)
+    {
         if !existing.redeemed {
             return Err(Error::ConflictingState);
         }
@@ -193,10 +199,8 @@ pub fn approve_claim(
     env.storage().persistent().set(&key, &claim);
     crate::storage::extend_persistent_ttl(env, &key);
 
-    env.events().publish(
-        (TOPIC_INSURANCE_CLAIM_APPROVED,),
-        (claimant, amount, now),
-    );
+    env.events()
+        .publish((TOPIC_INSURANCE_CLAIM_APPROVED,), (claimant, amount, now));
 
     Ok(())
 }
@@ -247,7 +251,11 @@ pub fn redeem_claim(env: &Env, claimant: Address) -> Result<i128, Error> {
 /// Read an insurance claim record for a user.
 pub fn get_claim(env: &Env, claimant: Address) -> Result<InsuranceClaimRecord, Error> {
     let key = DataKey::InsuranceClaim(claimant);
-    let claim = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
+    let claim = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(Error::NotFound)?;
     crate::storage::extend_persistent_ttl(env, &key);
     Ok(claim)
 }

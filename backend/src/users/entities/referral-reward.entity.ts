@@ -13,6 +13,7 @@ import { UserReferral } from './user-referral.entity';
 export enum RewardType {
   REFERRER_BONUS = 'referrer_bonus',
   REFEREE_BONUS = 'referee_bonus',
+  TIER_BONUS = 'tier_bonus',
 }
 
 export enum RewardStatus {

@@ -20,6 +20,7 @@ import { APP_GUARD, Reflector } from '@nestjs/core';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RateLimitService } from './rate-limit.service';
 import { OAuthService } from './oauth.service';
+import { TwoFactorService } from './two-factor/two-factor.service';
 import { WebAuthnCredential } from './entities/webauthn-credential.entity';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 
@@ -131,6 +132,13 @@ describe('Auth E2E — challenge → verify flow', () => {
               remaining: 99,
               reset_at: new Date(),
             }),
+          },
+        },
+        {
+          provide: TwoFactorService,
+          useValue: {
+            isEnabledFor: jest.fn().mockResolvedValue(false),
+            verifyLoginCode: jest.fn().mockResolvedValue(false),
           },
         },
         {

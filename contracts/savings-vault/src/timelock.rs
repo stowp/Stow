@@ -1,8 +1,11 @@
 //! Time-locked admin actions (issue #438).
+#![allow(dead_code)]
+#![allow(clippy::doc_lazy_continuation)]
 //!
 //! Sensitive admin operations cannot execute immediately. Instead, the admin
-//! _queues_ an action — storing a payload and an ETA (current ledger timestamp
-//! + configured delay) — and may only _execute_ it after the ETA passes.
+//! _queues_ an action — storing a payload and an ETA (the current ledger
+//! timestamp plus the configured delay) — and may only _execute_ it after the
+//! ETA passes.
 //! Actions also have a grace period after which they expire and can no longer
 //! be executed.
 //!
@@ -171,8 +174,7 @@ pub fn execute_action(env: &Env, id: u64) -> Result<(), Error> {
     env.storage().persistent().set(&key, &entry);
     extend_persistent_ttl(env, &key);
 
-    env.events()
-        .publish((TOPIC_TIMELOCK_EXECUTED,), (id, now));
+    env.events().publish((TOPIC_TIMELOCK_EXECUTED,), (id, now));
 
     Ok(())
 }
@@ -208,8 +210,7 @@ pub fn cancel_action(env: &Env, id: u64) -> Result<(), Error> {
     extend_persistent_ttl(env, &key);
 
     let now = env.ledger().timestamp();
-    env.events()
-        .publish((TOPIC_TIMELOCK_CANCELLED,), (id, now));
+    env.events().publish((TOPIC_TIMELOCK_CANCELLED,), (id, now));
 
     Ok(())
 }
@@ -239,36 +240,22 @@ pub fn get_queued_action(env: &Env, id: u64) -> Result<QueuedAction, Error> {
 /// validity checks have passed.
 fn apply_action(env: &Env, action: &TimelockAction) -> Result<(), Error> {
     match action {
-        TimelockAction::SetAdmin(new_admin) => {
-            apply_set_admin(env, new_admin.clone())
-        }
-        TimelockAction::Upgrade(new_wasm_hash) => {
-            apply_upgrade(env, new_wasm_hash.clone())
-        }
-        TimelockAction::SetDepositCap(cap) => {
-            apply_set_deposit_cap(env, *cap)
-        }
-        TimelockAction::SetMinDeposit(min) => {
-            apply_set_min_deposit(env, *min)
-        }
+        TimelockAction::SetAdmin(new_admin) => apply_set_admin(env, new_admin.clone()),
+        TimelockAction::Upgrade(new_wasm_hash) => apply_upgrade(env, new_wasm_hash.clone()),
+        TimelockAction::SetDepositCap(cap) => apply_set_deposit_cap(env, *cap),
+        TimelockAction::SetMinDeposit(min) => apply_set_min_deposit(env, *min),
         TimelockAction::SetEarlyWithdrawPenaltyBps(bps) => {
             apply_set_early_withdraw_penalty_bps(env, *bps)
         }
         TimelockAction::SetPenaltyRecipient(recipient) => {
             apply_set_penalty_recipient(env, recipient.clone())
         }
-        TimelockAction::SetMinLockPeriod(seconds) => {
-            apply_set_min_lock_period(env, *seconds)
-        }
-        TimelockAction::SetInterestRate(rate_bps) => {
-            apply_set_interest_rate(env, *rate_bps)
-        }
+        TimelockAction::SetMinLockPeriod(seconds) => apply_set_min_lock_period(env, *seconds),
+        TimelockAction::SetInterestRate(rate_bps) => apply_set_interest_rate(env, *rate_bps),
         TimelockAction::SetInterestFrequency(frequency) => {
             apply_set_interest_frequency(env, *frequency)
         }
-        TimelockAction::SetTimelockDelay(delay) => {
-            apply_set_timelock_delay(env, *delay)
-        }
+        TimelockAction::SetTimelockDelay(delay) => apply_set_timelock_delay(env, *delay),
     }
 }
 

@@ -3,7 +3,8 @@ export type EmailTemplateType =
   | 'match_result_available'
   | 'event_won'
   | 'event_cancelled'
-  | 'digest';
+  | 'digest'
+  | 'goal_reached';
 
 export interface DigestItem {
   title: string;
@@ -21,6 +22,9 @@ export interface EmailTemplateContext {
   digestFrequency?: 'daily' | 'weekly';
   digestItems?: DigestItem[];
   digestPeriod?: string;
+  goalName?: string;
+  targetAmount?: string;
+  reachedAt?: string;
 }
 
 const baseStyles = `
@@ -79,6 +83,22 @@ export function renderEmailTemplate(
            <p>Any stakes will be refunded according to the event rules.</p>`,
         ),
         text: `The event "${context.eventTitle ?? 'Event'}" has been cancelled.`,
+      };
+
+    case 'goal_reached':
+      return {
+        subject: `🎉 Congratulations! You reached your savings goal: ${context.goalName ?? 'Goal'}`,
+        html: wrapHtml(
+          'Goal Reached!',
+          `<p>Congratulations! You've reached your savings goal!</p>
+           <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:16px;margin:16px 0;">
+             <strong style="color:#166534;font-size:18px;">${escapeHtml(context.goalName ?? 'Your Goal')}</strong>
+             <p style="margin:8px 0 0;color:#166534;">Target: ${escapeHtml(context.targetAmount ?? '0')} USDC</p>
+           </div>
+           <p style="color:#475569;">Reached on ${context.reachedAt ?? 'today'}</p>
+           <p>Keep up the great work! Your dedication to saving is paying off.</p>`,
+        ),
+        text: `Congratulations! You reached your savings goal: ${context.goalName ?? 'Your Goal'}. Target: ${context.targetAmount ?? '0'} USDC`,
       };
 
     case 'digest': {

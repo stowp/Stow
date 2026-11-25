@@ -217,6 +217,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "boost-nft"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1310,6 +1317,7 @@ dependencies = [
 name = "savings-vault"
 version = "0.1.0"
 dependencies = [
+ "boost-nft",
  "ed25519-dalek",
  "proptest",
  "soroban-sdk",

@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Lock,
   LogOut,
+  PartyPopper,
   Scale,
   Settings,
   Target,
@@ -23,6 +24,7 @@ export const sidebarItems = [
   { label: "Groups", href: "/savings/groups/new", match: "/savings/groups", icon: Users },
   { label: "Deposit & withdraw", href: "/ramps/deposit", match: "/ramps", icon: ArrowLeftRight },
   { label: "Referrals", href: "/referrals", icon: Gift },
+  { label: "Community", href: "/social", icon: PartyPopper },
   { label: "Settings", href: "/settings", icon: Settings },
 ] as const;
 

@@ -35,9 +35,17 @@ export class UserPreferences {
   @Column({ default: true })
   goal_contribution_notifications: boolean;
 
+  /** A savings goal reached a milestone (25%, 50%, 75%). */
+  @Column({ default: true })
+  goal_milestone_notifications: boolean;
+
   /** A savings goal reached its target amount. */
   @Column({ default: true })
   goal_reached_notifications: boolean;
+
+  /** Yield was earned from a harvest event. */
+  @Column({ default: true })
+  yield_earned_notifications: boolean;
 
   /** A deposit into a savings vault was confirmed. */
   @Column({ default: true })

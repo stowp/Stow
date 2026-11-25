@@ -133,19 +133,38 @@ self.addEventListener('fetch', (event) => {
 
 // Handle background sync
 self.addEventListener('sync', (event) => {
-  if (event.tag === 'sync-data') {
+  if (event.tag === 'stow-sync') {
     event.waitUntil(syncData());
   }
 });
 
 async function syncData() {
-  try {
-    // Implement your data sync logic here
-    console.log('Background sync completed');
-  } catch (error) {
-    console.error('Background sync failed:', error);
+  // Get sync queue from clients
+  const clients = await self.clients.matchAll();
+  
+  for (const client of clients) {
+    try {
+      // Send message to client to process sync queue
+      client.postMessage({ type: 'SYNC_REQUESTED' });
+    } catch (e) {
+      console.error('Failed to notify client:', e);
+    }
   }
+  
+  console.log('Background sync completed');
 }
+
+// Handle messages from clients
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+  
+  if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
+    const { title, options } = event.data;
+    self.registration.showNotification(title, options);
+  }
+});
 
 // Handle push notifications
 self.addEventListener('push', (event) => {
@@ -186,9 +205,4 @@ self.addEventListener('notificationclick', (event) => {
   }
 });
 
-// Handle messages from clients
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});
+

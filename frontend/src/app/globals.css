@@ -1,27 +1,53 @@
 @import "tailwindcss";
 
 :root {
+  /* Dark mode (default) - WCAG AA compliant */
   --background: #05070d;
   --background-elevated: #0a0e1a;
   --foreground: #eef2ff;
-  --muted: #9aa6c4;
-  --border: rgba(148, 163, 210, 0.14);
-  --card: rgba(255, 255, 255, 0.025);
+  --muted: #9ca3af;
+  --muted-foreground: #6b7280;
+  --border: rgba(148, 163, 210, 0.18);
+  --card: rgba(255, 255, 255, 0.04);
+  --card-foreground: #f9fafb;
   --brand: #2dd4bf;
-  --brand-2: #6366f1;
-  --brand-3: #a855f7;
+  --brand-2: #818cf8;
+  --brand-3: #c084fc;
+  --brand-foreground: #022c22;
+  /* Status colors - dark mode */
+  --destructive: #f87171;
+  --destructive-foreground: #fef2f2;
+  --success: #4ade80;
+  --success-foreground: #022c22;
+  --warning: #fbbf24;
+  --warning-foreground: #422006;
+  --info: #60a5fa;
+  --info-foreground: #1e3a5f;
 }
 
 :root[data-theme="light"] {
-  --background: #f7f8fc;
+  /* Light mode - WCAG AA compliant */
+  --background: #f8fafc;
   --background-elevated: #ffffff;
-  --foreground: #0f1424;
-  --muted: #5b6483;
-  --border: rgba(15, 20, 36, 0.1);
+  --foreground: #0f172a;
+  --muted: #64748b;
+  --muted-foreground: #475569;
+  --border: rgba(15, 20, 36, 0.12);
   --card: rgba(15, 20, 36, 0.03);
+  --card-foreground: #0f172a;
   --brand: #0d9488;
   --brand-2: #4f46e5;
   --brand-3: #9333ea;
+  --brand-foreground: #ecfeff;
+  /* Status colors - light mode */
+  --destructive: #dc2626;
+  --destructive-foreground: #fef2f2;
+  --success: #16a34a;
+  --success-foreground: #f0fdf4;
+  --warning: #d97706;
+  --warning-foreground: #fffbeb;
+  --info: #2563eb;
+  --info-foreground: #eff6ff;
 }
 
 @media (prefers-color-scheme: light) {
@@ -38,31 +64,25 @@
   }
 }
 
-/* Status text (errors, success, warnings) is written with the pale 300/400
-   shades, which are tuned for the dark theme. In light mode, darken them so
-   that text keeps enough contrast against the light background. */
-:root[data-theme="light"] {
-  --color-red-300: oklch(50.5% 0.213 27.518);
-  --color-red-400: oklch(50.5% 0.213 27.518);
-  --color-green-400: oklch(52.7% 0.154 150.069);
-  --color-emerald-400: oklch(50.8% 0.118 165.612);
-  --color-amber-400: oklch(55.5% 0.163 48.998);
-  --color-yellow-300: oklch(55.4% 0.135 66.442);
-  --color-yellow-400: oklch(55.4% 0.135 66.442);
-  --color-blue-400: oklch(48.8% 0.243 264.376);
-}
+/* Status colors using CSS variables for WCAG AA contrast */
+:root[data-theme="light"] .text-red-400,
+:root[data-theme="light"] .text-red-300 { color: var(--destructive); }
+:root[data-theme="light"] .text-green-400,
+:root[data-theme="light"] .text-emerald-400 { color: var(--success); }
+:root[data-theme="light"] .text-yellow-400,
+:root[data-theme="light"] .text-yellow-300,
+:root[data-theme="light"] .text-amber-400 { color: var(--warning); }
+:root[data-theme="light"] .text-blue-400 { color: var(--info); }
 
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --color-red-300: oklch(50.5% 0.213 27.518);
-    --color-red-400: oklch(50.5% 0.213 27.518);
-    --color-green-400: oklch(52.7% 0.154 150.069);
-    --color-emerald-400: oklch(50.8% 0.118 165.612);
-    --color-amber-400: oklch(55.5% 0.163 48.998);
-    --color-yellow-300: oklch(55.4% 0.135 66.442);
-    --color-yellow-400: oklch(55.4% 0.135 66.442);
-    --color-blue-400: oklch(48.8% 0.243 264.376);
-  }
+  :root:not([data-theme="dark"]) .text-red-400,
+  :root:not([data-theme="dark"]) .text-red-300 { color: var(--destructive); }
+  :root:not([data-theme="dark"]) .text-green-400,
+  :root:not([data-theme="dark"]) .text-emerald-400 { color: var(--success); }
+  :root:not([data-theme="dark"]) .text-yellow-400,
+  :root:not([data-theme="dark"]) .text-yellow-300,
+  :root:not([data-theme="dark"]) .text-amber-400 { color: var(--warning); }
+  :root:not([data-theme="dark"]) .text-blue-400 { color: var(--info); }
 }
 
 @theme inline {
@@ -70,11 +90,22 @@
   --color-background-elevated: var(--background-elevated);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
   --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
   --color-brand: var(--brand);
   --color-brand-2: var(--brand-2);
   --color-brand-3: var(--brand-3);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -162,4 +193,52 @@ body {
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 210, 0.25) transparent;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* Screen reader only class */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.sr-only.focusable:focus,
+.sr-only:focus {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: inherit;
+  margin: inherit;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* Focus ring for keyboard navigation */
+.focus-ring-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

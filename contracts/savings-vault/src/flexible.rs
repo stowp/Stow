@@ -28,10 +28,34 @@ use crate::types::{DataKey, FlexibleAccount};
 /// has not been initialized, `DepositBelowMinimum`, `DepositCapExceeded`,
 /// `Overflow` if the resulting balance would not fit in `i128`.
 pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
+    deposit_with_transfer(env, from, amount, storage::transfer_in, true)
+}
+
+/// Deposit from an owner who previously authorized the vault through SEP-41
+/// allowance. Used by permissionless recurring-deposit execution.
+pub(crate) fn deposit_from_allowance(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
+    deposit_with_transfer(
+        env,
+        from,
+        amount,
+        storage::transfer_in_from_allowance,
+        false,
+    )
+}
+
+fn deposit_with_transfer(
+    env: &Env,
+    from: Address,
+    amount: i128,
+    transfer: fn(&Env, &Address, i128) -> Result<(), Error>,
+    require_owner_auth: bool,
+) -> Result<(), Error> {
     extend_instance_ttl(env);
     admin::require_not_paused(env)?;
     admin::require_not_emergency(env)?;
-    from.require_auth();
+    if require_owner_auth {
+        from.require_auth();
+    }
 
     if amount <= 0 {
         return Err(Error::InvalidAmount);
@@ -62,7 +86,7 @@ pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
         return Err(Error::DepositCapExceeded);
     }
 
-    storage::transfer_in(env, &from, amount)?;
+    transfer(env, &from, amount)?;
 
     let premium = insurance::collect_premium(env, amount)?;
     let new_balance = new_balance.checked_sub(premium).ok_or(Error::Overflow)?;
@@ -70,7 +94,14 @@ pub fn deposit(env: &Env, from: Address, amount: i128) -> Result<(), Error> {
     account.balance = new_balance;
     account.updated_at = now;
     env.storage().persistent().set(&key, &account);
+    crate::inheritance::touch_owner(env, &from);
     storage::extend_persistent_ttl(env, &key);
+
+    // Owner-signed deposits count as activity for inheritance planning.
+    // Allowance-driven (keeper) deposits do not prove the owner is alive.
+    if require_owner_auth {
+        crate::inheritance::touch_owner(env, &from);
+    }
 
     env.events().publish(
         (TOPIC_DEPOSIT, from.clone()),
@@ -118,13 +149,20 @@ pub fn withdraw(env: &Env, owner: Address, amount: i128) -> Result<(), Error> {
 
     let new_balance = account.balance.checked_sub(amount).ok_or(Error::Overflow)?;
 
+    // Collateral lock: a vault enabled as collateral cannot be withdrawn
+    // below the minimum locked balance for outstanding debt.
+    crate::collateral::check_withdrawal(env, &owner, new_balance)?;
+
     storage::transfer_out(env, &owner, amount)?;
 
     let now = env.ledger().timestamp();
     account.balance = new_balance;
     account.updated_at = now;
     env.storage().persistent().set(&key, &account);
+    crate::inheritance::touch_owner(env, &owner);
     storage::extend_persistent_ttl(env, &key);
+
+    crate::inheritance::touch_owner(env, &owner);
 
     env.events().publish(
         (TOPIC_WITHDRAW, owner.clone()),

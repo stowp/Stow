@@ -235,7 +235,7 @@ export default function Home() {
   return (
     <>
       <Navbar />
-      <main id="top" className="flex-1">
+      <main id="main-content" tabIndex={-1} className="flex-1">
         {/* ================= HERO ================= */}
         <section className="relative px-5 pt-36 pb-24 sm:px-8 sm:pt-44">
           <div className="mx-auto max-w-5xl text-center">

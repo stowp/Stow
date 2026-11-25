@@ -19,6 +19,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
 import { AuthAuditEvent } from './entities/auth-audit-event.entity';
 import { WebAuthnCredential } from './entities/webauthn-credential.entity';
 import { AuthService } from './auth.service';
+import { TwoFactorService } from './two-factor/two-factor.service';
 
 jest.mock('@simplewebauthn/server', () => ({
   generateAuthenticationOptions: jest.fn(),
@@ -157,6 +158,13 @@ describe('AuthService', () => {
           useValue: {
             create: jest.fn((entity: Partial<AuthAuditEvent>) => entity),
             save: jest.fn((entity: AuthAuditEvent) => Promise.resolve(entity)),
+          },
+        },
+        {
+          provide: TwoFactorService,
+          useValue: {
+            isEnabledFor: jest.fn().mockResolvedValue(false),
+            verifyLoginCode: jest.fn().mockResolvedValue(false),
           },
         },
         {

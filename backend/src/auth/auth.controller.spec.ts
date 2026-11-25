@@ -137,6 +137,7 @@ describe('AuthController', () => {
       expect(authService.verifyChallenge).toHaveBeenCalledWith(
         dto.stellar_address,
         dto.signed_challenge,
+        undefined,
       );
       expect(result).toEqual({ access_token: 'signed.jwt.token', user });
     });

@@ -282,8 +282,33 @@ export class EmailService implements OnModuleInit, OnModuleDestroy {
       event_cancelled: NotificationCategory.EventCancelled,
       match_result_available: NotificationCategory.MatchResolved,
       event_won: NotificationCategory.WinnerVerified,
+      goal_reached: NotificationCategory.GOALS,
     };
     return template ? (map[template] ?? null) : null;
+  }
+
+  async sendGoalReachedEmail(
+    userAddress: string,
+    data: { goalName: string; targetAmount: string; reachedAt: Date },
+  ): Promise<{ queued: boolean; reason?: string }> {
+    const user = await this.userRepository.findOne({
+      where: { stellar_address: userAddress },
+    });
+
+    if (!user?.email) {
+      return { queued: false, reason: 'User email not found' };
+    }
+
+    return this.sendTemplatedEmail(
+      user.email,
+      'goal_reached',
+      {
+        goalName: data.goalName,
+        targetAmount: data.targetAmount,
+        reachedAt: data.reachedAt.toLocaleDateString(),
+      },
+      userAddress,
+    );
   }
 
   private async processQueue(): Promise<void> {

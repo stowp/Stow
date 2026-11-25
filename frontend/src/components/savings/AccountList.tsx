@@ -6,6 +6,7 @@ import { Search } from "lucide-react";
 import type { SavingsAccount } from "@/hooks/useSavingsAccount";
 import { formatStroopsAmount } from "@/lib/currency";
 import { matchesSearch } from "@/lib/nicknames";
+import AriaLive from "@/components/a11y/AriaLive";
 
 export interface AccountListProps {
   accounts: SavingsAccount[];
@@ -38,6 +39,13 @@ export default function AccountList({
 
   return (
     <section aria-labelledby={`${searchId}-heading`}>
+      <AriaLive
+        message={
+          isLoading
+            ? "Loading accounts."
+            : `${visible.length} ${visible.length === 1 ? "account" : "accounts"} shown.`
+        }
+      />
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <h2
           id={`${searchId}-heading`}

@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
+import { enqueueOperation, isNetworkError, isOnline } from "@/lib/offline";
 import { parseTopUpAmountToStroops } from "./useLockedTopUp";
 
 export type WithdrawAmountError =
@@ -47,7 +48,9 @@ export const WITHDRAW_AMOUNT_ERROR_MESSAGES: Record<WithdrawAmountError, string>
   "exceeds-balance": "Amount exceeds your available balance.",
 };
 
-export type WithdrawStatus = "idle" | "pending" | "success" | "error";
+/** `queued`: the device was offline, so the withdrawal was saved to the
+ * offline queue (`@/lib/offline`) and will be sent once reconnected. */
+export type WithdrawStatus = "idle" | "pending" | "success" | "queued" | "error";
 
 export interface WithdrawResult {
   owner: string;
@@ -104,16 +107,26 @@ export function useWithdraw(): UseWithdrawReturn {
         return null;
       }
 
-      setStatus("pending");
       setError(null);
+      const stroops = parseTopUpAmountToStroops(amount) ?? "0";
+      const idempotencyKey = newIdempotencyKey();
+
+      // Offline: queue it to be replayed (same idempotency key) on reconnect.
+      if (!isOnline()) {
+        enqueueOperation({ type: "withdraw", account: owner, amount: stroops, idempotencyKey });
+        setStatus("queued");
+        return null;
+      }
+
+      setStatus("pending");
 
       try {
         const response = await apiFetch("/api/savings/flexible/withdraw", {
           method: "POST",
-          headers: { "Idempotency-Key": newIdempotencyKey() },
+          headers: { "Idempotency-Key": idempotencyKey },
           body: JSON.stringify({
             owner,
-            amount: parseTopUpAmountToStroops(amount),
+            amount: stroops,
           }),
         });
 
@@ -134,6 +147,14 @@ export function useWithdraw(): UseWithdrawReturn {
         setStatus("success");
         return data;
       } catch (err) {
+        // The connection dropped mid-request: queue it rather than lose it.
+        // Reusing the idempotency key makes the replay safe even if this
+        // attempt actually reached the server.
+        if (isNetworkError(err) && !isOnline()) {
+          enqueueOperation({ type: "withdraw", account: owner, amount: stroops, idempotencyKey });
+          setStatus("queued");
+          return null;
+        }
         setError(
           err instanceof Error ? err : new Error("Unknown error occurred"),
         );

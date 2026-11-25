@@ -18,7 +18,8 @@
 //!   mutating traffic within the bump window, none of these values expire.
 //! - **Persistent storage** — one entry per record, for unbounded
 //!   collections keyed by user or id: `Flexible(Address)`,
-//!   `InterestAccount(Address)`, `Locked(u64)`, `Goal(u64)`, `Group(u64)`.
+//!   `InterestAccount(Address)`, `Locked(u64)`, `Goal(u64)`, `Group(u64)`,
+//!   `RecurringDeposit(Address)`, and `GroupWithdrawal(u64)`.
 //!   These do **not** share a TTL with the
 //!   instance; each entry's TTL is refreshed only when that specific entry
 //!   is written. A record that is never touched again (e.g. a flexible
@@ -27,7 +28,10 @@
 //!   network; reading an archived entry then requires a `restore` before
 //!   the next `get`. [`extend_persistent_ttl`] is called after every read
 //!   and write of a `Flexible`, `InterestAccount`, `Locked`, `Goal`, or
-//!   `Group` record so a record touched within the bump window never expires.
+//!   `Group` or `GroupWithdrawal` record so a record touched within the bump
+//!   window never expires.
+//!   Recurring schedules use a longer TTL so monthly entries remain available
+//!   until their next execution.
 //!
 //! ## TTL policy
 //!
@@ -64,11 +68,17 @@ pub const INSTANCE_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub const INSTANCE_LIFETIME_THRESHOLD: u32 = INSTANCE_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
 /// Persistent per-entry TTL: bumped on every read/write of a `Flexible`,
-/// `Locked`, `Goal`, or `Group` record via [`extend_persistent_ttl`]. Same
+/// `Locked`, `Goal`, `Group`, or `GroupWithdrawal` record via
+/// [`extend_persistent_ttl`]. Same
 /// window as the instance bump — a record touched at least once a month
 /// (deposit, withdraw, contribute, a simple query, ...) never expires.
 pub const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = PERSISTENT_BUMP_AMOUNT - DAY_IN_LEDGERS;
+/// Recurring schedules are touched only at execution time, so give them
+/// enough TTL headroom for missed intervals as well as the monthly cadence.
+pub const RECURRING_PERSISTENT_BUMP_AMOUNT: u32 = 180 * DAY_IN_LEDGERS;
+pub const RECURRING_PERSISTENT_LIFETIME_THRESHOLD: u32 =
+    RECURRING_PERSISTENT_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
 /// Bump the instance TTL. Call at the top of every state-changing entrypoint.
 pub fn extend_instance_ttl(env: &Env) {
@@ -101,6 +111,23 @@ pub fn extend_persistent_ttl(env: &Env, key: &DataKey) {
         key,
         PERSISTENT_LIFETIME_THRESHOLD,
         PERSISTENT_BUMP_AMOUNT,
+    );
+}
+
+/// Bump the longer TTL used for recurring schedules.
+pub fn extend_recurring_ttl(env: &Env, key: &DataKey) {
+    if env
+        .storage()
+        .instance()
+        .get::<_, bool>(&DataKey::TokenTransferActive)
+        .unwrap_or(false)
+    {
+        soroban_sdk::panic_with_error!(env, Error::ReentrantCall);
+    }
+    env.storage().persistent().extend_ttl(
+        key,
+        RECURRING_PERSISTENT_LIFETIME_THRESHOLD,
+        RECURRING_PERSISTENT_BUMP_AMOUNT,
     );
 }
 
@@ -150,6 +177,21 @@ pub fn transfer_in(env: &Env, from: &Address, amount: i128) -> Result<(), Error>
     begin_token_transfer(env)?;
     let token_client = token::Client::new(env, &token_address);
     token_client.transfer(from, &env.current_contract_address(), &amount);
+    end_token_transfer(env);
+    Ok(())
+}
+
+/// Move `amount` of the vault token from `from` into the contract using the
+/// vault's SEP-41 allowance. The owner must have approved the vault beforehand.
+pub fn transfer_in_from_allowance(env: &Env, from: &Address, amount: i128) -> Result<(), Error> {
+    if amount <= 0 {
+        return Err(Error::InvalidAmount);
+    }
+    let token_address = get_token(env).ok_or(Error::NotInitialized)?;
+    begin_token_transfer(env)?;
+    let token_client = token::Client::new(env, &token_address);
+    let vault = env.current_contract_address();
+    token_client.transfer_from(&vault, from, &vault, &amount);
     end_token_transfer(env);
     Ok(())
 }

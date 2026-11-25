@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
+import { enqueueOperation, isOnline } from "@/lib/offline";
 import { useAnchorDeposit } from "./useAnchorDeposit";
+import { parseTopUpAmountToStroops } from "./useLockedTopUp";
 
 export type DepositAmountError = "required" | "invalid" | "too-small";
 
@@ -33,6 +35,8 @@ export type UseDepositStatus =
   | "idle"
   | "submitting"
   | "interactive"
+  /** Offline: saved to the offline queue and sent once reconnected. */
+  | "queued"
   | "error";
 
 export interface DepositSession {
@@ -73,6 +77,7 @@ export function useDeposit(): UseDepositReturn {
   } = useAnchorDeposit();
   const [validationError, setValidationError] =
     useState<DepositAmountError | null>(null);
+  const [queued, setQueued] = useState(false);
 
   const deposit = useCallback(
     async (
@@ -83,6 +88,18 @@ export function useDeposit(): UseDepositReturn {
       setValidationError(validation);
       if (validation) return validation;
 
+      // Offline: queue the request to be replayed on reconnect.
+      if (!isOnline()) {
+        enqueueOperation({
+          type: "deposit",
+          account,
+          amount: parseTopUpAmountToStroops(amount.trim()) ?? "0",
+        });
+        setQueued(true);
+        return null;
+      }
+
+      setQueued(false);
       await initiateDeposit({ assetCode: "USDC", account });
       return null;
     },
@@ -91,11 +108,15 @@ export function useDeposit(): UseDepositReturn {
 
   const reset = useCallback(() => {
     setValidationError(null);
+    setQueued(false);
     resetAnchorDeposit();
   }, [resetAnchorDeposit]);
 
-  const status: UseDepositStatus =
-    depositStatus === "requesting" ? "submitting" : depositStatus;
+  const status: UseDepositStatus = queued
+    ? "queued"
+    : depositStatus === "requesting"
+      ? "submitting"
+      : depositStatus;
 
   return {
     status,

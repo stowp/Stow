@@ -2,6 +2,7 @@
 
 import { useId, useMemo } from "react";
 import type { CalculatorPoint } from "@/lib/savingsCalculator";
+import { describeSavingsGrowth } from "@/lib/audioDescriptions";
 
 export interface SavingsGrowthChartProps {
   /** Month-by-month projection, starting at month 0. */
@@ -98,10 +99,7 @@ export default function SavingsGrowthChart({
     };
   }, [points]);
 
-  const last = points[points.length - 1];
-  const summary = last
-    ? `Projected balance grows from ${compact.format(points[0].balance)} to ${compact.format(last.balance)} over ${formatMonth(last.month)}, of which ${compact.format(last.principal)} is principal and ${compact.format(last.interest)} is interest.`
-    : "No projection to show.";
+  const summary = describeSavingsGrowth(points);
 
   return (
     <figure className={className}>

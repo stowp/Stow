@@ -72,7 +72,11 @@ export default function AppAccessLock({
   };
 
   return (
-    <main className="grid min-h-screen place-items-center bg-background p-4">
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="grid min-h-screen place-items-center bg-background p-4"
+    >
       <section
         aria-labelledby="app-unlock-title"
         aria-modal="true"

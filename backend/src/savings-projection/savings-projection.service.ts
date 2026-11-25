@@ -5,6 +5,7 @@ import { GroupsService } from '../savings/groups.service';
 import { LockedPlansService } from '../savings/locked-plans.service';
 import { NotificationGeneratorService } from '../notifications/notification-generator.service';
 import { SavingsService } from '../savings/savings.service';
+import { Goal } from '../goals/entities/goal.entity';
 
 /**
  * Applies a single savings-vault contract event to the off-chain
@@ -43,10 +44,41 @@ export class SavingsProjectionService {
       }
 
       case 'goal_contribution': {
-        const goal = await this.goalsService.applyContribution(
-          String(data.id ?? data.goal_id),
-          String(data.amount),
+        const goalId = String(data.id ?? data.goal_id);
+        const amount = String(data.amount);
+
+        // Get the goal state before applying the contribution
+        const goalBefore = await this.goalsService.getByOnChainId(goalId);
+        const previousPercent = this.calculateProgressPercent(
+          goalBefore.current_amount,
+          goalBefore.target_amount,
         );
+
+        // Apply the contribution
+        const goal = await this.goalsService.applyContribution(goalId, amount);
+        const currentPercent = this.calculateProgressPercent(
+          goal.current_amount,
+          goal.target_amount,
+        );
+
+        // Send contribution notification
+        await this.notificationGeneratorService.handleGoalContribution({
+          goalId: goal.on_chain_id,
+          owner: goal.owner,
+          name: goal.name,
+          contributionAmount: amount,
+          currentAmount: goal.current_amount,
+          targetAmount: goal.target_amount,
+        });
+
+        // Check for milestone notifications (25%, 50%, 75%)
+        await this.checkAndNotifyMilestones(
+          goal,
+          previousPercent,
+          currentPercent,
+        );
+
+        // Check if goal is now reached
         if (BigInt(goal.current_amount) >= BigInt(goal.target_amount)) {
           await this.markGoalReachedAndNotify(goal.on_chain_id);
         }
@@ -123,15 +155,20 @@ export class SavingsProjectionService {
         // Data: [owner, amount, shares_minted, position_shares, total_shares, timestamp]
         const owner = String(data.owner ?? '');
         const shares = String(data.position_shares ?? data.total_shares ?? '0');
-        const exchangeRate = data.total_shares && data.total_assets
-          ? this.calculateExchangeRate(
-              String(data.total_assets),
-              String(data.total_shares),
-            )
-          : undefined;
+        const exchangeRate =
+          data.total_shares && data.total_assets
+            ? this.calculateExchangeRate(
+                String(data.total_assets),
+                String(data.total_shares),
+              )
+            : undefined;
 
         if (owner && shares) {
-          await this.savingsService.upsertYieldPosition(owner, shares, exchangeRate);
+          await this.savingsService.upsertYieldPosition(
+            owner,
+            shares,
+            exchangeRate,
+          );
           this.logger.log(`Yield deposited: owner=${owner}, shares=${shares}`);
         }
         break;
@@ -168,6 +205,50 @@ export class SavingsProjectionService {
   }
 
   /**
+   * Calculate the progress percentage for a goal.
+   */
+  private calculateProgressPercent(
+    currentAmount: string,
+    targetAmount: string,
+  ): number {
+    const current = BigInt(currentAmount);
+    const target = BigInt(targetAmount);
+    if (target === 0n) return 0;
+    return Number((current * 100n) / target);
+  }
+
+  /**
+   * Check if any milestones (25%, 50%, 75%) were crossed and send notifications.
+   */
+  private async checkAndNotifyMilestones(
+    goal: {
+      on_chain_id: string;
+      owner: string;
+      name: string;
+      current_amount: string;
+      target_amount: string;
+    },
+    previousPercent: number,
+    currentPercent: number,
+  ): Promise<void> {
+    const milestones = [25, 50, 75];
+
+    for (const milestone of milestones) {
+      // Check if this milestone was just crossed (previous < milestone <= current)
+      if (previousPercent < milestone && currentPercent >= milestone) {
+        await this.notificationGeneratorService.handleGoalMilestone({
+          goalId: goal.on_chain_id,
+          owner: goal.owner,
+          name: goal.name,
+          currentAmount: goal.current_amount,
+          targetAmount: goal.target_amount,
+          milestonePercent: milestone,
+        });
+      }
+    }
+  }
+
+  /**
    * Converts a contract event's `unlock_at` field — a Soroban `u64` ledger
    * timestamp in whole seconds since the Unix epoch, decoded as a JS
    * `number`, `string`, or `bigint` depending on the XDR normalization step
@@ -183,7 +264,10 @@ export class SavingsProjectionService {
    * Calculates the exchange rate from total assets and total shares.
    * Returns the rate as a scaled integer string (assets/shares * 1e7 for precision).
    */
-  private calculateExchangeRate(totalAssets: string, totalShares: string): string {
+  private calculateExchangeRate(
+    totalAssets: string,
+    totalShares: string,
+  ): string {
     try {
       const assets = BigInt(totalAssets);
       const shares = BigInt(totalShares);

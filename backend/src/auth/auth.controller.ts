@@ -170,6 +170,7 @@ export class AuthController {
     return this.authService.verifyChallenge(
       verifyChallengeDto.stellar_address,
       verifyChallengeDto.signed_challenge,
+      verifyChallengeDto.two_factor_code,
     );
   }
 

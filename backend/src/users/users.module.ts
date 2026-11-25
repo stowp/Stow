@@ -19,6 +19,7 @@ import { ReferralModule } from '../referral/referral.module';
       UserReferral,
       Notification,
       AnchorDeposit,
+      ReferralReward,
     ]),
     ReferralModule,
   ],

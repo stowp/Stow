@@ -4,6 +4,8 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -16,6 +18,7 @@ import {
   RewardType,
 } from './entities/referral-reward.entity';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { EnhancedReferralService } from '../referral/enhanced-referral.service';
 
 const DEFAULT_REWARD_AMOUNT = '1000000'; // 1 XLM in stroops
 const DEFAULT_ASSET_CODE = 'XLM';
@@ -49,6 +52,8 @@ export class ReferralService {
     @InjectRepository(ReferralReward)
     private readonly rewardsRepo: Repository<ReferralReward>,
     private readonly config: ConfigService,
+    @Inject(forwardRef(() => EnhancedReferralService))
+    private readonly enhancedReferralService: EnhancedReferralService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -111,6 +116,13 @@ export class ReferralService {
     await this.referralsRepo.save(referral);
 
     await this.issueRewards(referral);
+
+    // Update referrer's tier after qualifying
+    try {
+      await this.enhancedReferralService.updateUserTier(referral.referrer_id);
+    } catch (error) {
+      this.logger.warn(`Failed to update referrer tier: ${error.message}`);
+    }
 
     this.logger.log(
       `Referral ${referral.id} qualified — rewards issued for referrer ${referral.referrer_id} and referee ${userId}`,

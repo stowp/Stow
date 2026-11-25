@@ -30,6 +30,14 @@ export class SavingsAccount {
   @Column({ type: 'varchar', default: '0' })
   balance: string;
 
+  /** Set when this account is merged into another; archived accounts are read-only. */
+  @Column({ type: 'timestamptz', nullable: true })
+  archived_at: Date | null;
+
+  /** Owner address that received this account's balance, once archived. */
+  @Column({ type: 'varchar', nullable: true })
+  merged_into: string | null;
+
   @CreateDateColumn()
   created_at: Date;
 

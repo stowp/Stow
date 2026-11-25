@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { formatStroops } from "@/lib/currency";
 import type { SavingsSummary } from "@/hooks/useSavingsSummary";
+import { describePortfolioAllocation } from "@/lib/audioDescriptions";
 
 interface PortfolioAllocationChartProps {
   summary: SavingsSummary | null;
@@ -51,7 +52,10 @@ export default function PortfolioAllocationChart({
   summary,
   isLoading,
 }: PortfolioAllocationChartProps) {
+  const titleId = useId();
+  const descriptionId = useId();
   const [activeProduct, setActiveProduct] = useState<string | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -95,8 +99,12 @@ export default function PortfolioAllocationChart({
     });
 
   const activeAllocation = allocations.find(
-    (allocation) => allocation.product === activeProduct,
+    (allocation) => allocation.product === (activeProduct ?? selectedProduct),
   );
+
+  const toggleProduct = (product: string) => {
+    setSelectedProduct((current) => (current === product ? null : product));
+  };
 
   return (
     <section
@@ -113,7 +121,10 @@ export default function PortfolioAllocationChart({
 
       {total <= 0n ? (
         <div className="mt-5 flex flex-col items-center gap-3 py-4 text-center">
-          <div className="flex h-48 w-48 items-center justify-center rounded-full border-[18px] border-border px-6 text-sm text-muted">
+          <div
+            role="status"
+            className="flex h-48 w-48 items-center justify-center rounded-full border-[18px] border-border px-6 text-sm text-muted"
+          >
             No savings allocated yet
           </div>
         </div>
@@ -121,10 +132,22 @@ export default function PortfolioAllocationChart({
         <div className="mt-5 flex flex-col items-center gap-6 sm:flex-row sm:items-center">
           <svg
             role="group"
-            aria-label="Savings allocation by category"
+            aria-labelledby={titleId}
+            aria-describedby={descriptionId}
             viewBox="0 0 200 200"
             className="h-48 w-48 shrink-0 overflow-visible"
           >
+            <title id={titleId}>Savings allocation by category</title>
+            <desc id={descriptionId}>
+              {describePortfolioAllocation(
+                `${formatStroops(total.toString())} XLM`,
+                allocations.map((allocation) => ({
+                  label: allocation.label,
+                  amount: `${formatStroops(allocation.total)} XLM`,
+                  percent: allocation.percent,
+                })),
+              )}
+            </desc>
             {slices.map((slice) => {
               const isActive = activeProduct === slice.product;
               const amount = formatStroops(slice.total);
@@ -138,7 +161,7 @@ export default function PortfolioAllocationChart({
                   role="button"
                   tabIndex={0}
                   aria-label={tooltip}
-                  aria-pressed={isActive}
+                  aria-pressed={selectedProduct === slice.product}
                   className={`${slice.color} cursor-pointer transition-opacity focus:outline-none focus:opacity-80 ${isActive ? "opacity-80" : "opacity-100"}`}
                   data-testid={`portfolio-allocation-slice-${slice.product}`}
                   fill="currentColor"
@@ -148,6 +171,13 @@ export default function PortfolioAllocationChart({
                   onMouseLeave={() => setActiveProduct(null)}
                   onFocus={() => setActiveProduct(slice.product)}
                   onBlur={() => setActiveProduct(null)}
+                  onClick={() => toggleProduct(slice.product)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      toggleProduct(slice.product);
+                    }
+                  }}
                 >
                   <title>{tooltip}</title>
                 </path>
@@ -172,10 +202,12 @@ export default function PortfolioAllocationChart({
                   <button
                     type="button"
                     className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-background-elevated focus:outline-none focus:ring-2 focus:ring-brand/50"
+                    aria-pressed={selectedProduct === allocation.product}
                     onMouseEnter={() => setActiveProduct(allocation.product)}
                     onMouseLeave={() => setActiveProduct(null)}
                     onFocus={() => setActiveProduct(allocation.product)}
                     onBlur={() => setActiveProduct(null)}
+                    onClick={() => toggleProduct(allocation.product)}
                   >
                     <span
                       aria-hidden="true"

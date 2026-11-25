@@ -32,19 +32,23 @@ export default function SummaryCards({
 }: SummaryCardsProps) {
   if (isLoading || !summary) {
     return (
-      <div
+      <section
+        role="status"
+        aria-label="Loading savings summary"
+        aria-busy="true"
         className={`grid grid-cols-1 gap-4 sm:grid-cols-3 ${className}`}
         data-testid="summary-cards-loading"
       >
         <SummaryCardSkeleton />
         <SummaryCardSkeleton />
         <SummaryCardSkeleton />
-      </div>
+      </section>
     );
   }
 
   return (
-    <div
+    <section
+      aria-label="Savings summary"
       className={`grid grid-cols-1 gap-4 sm:grid-cols-3 ${className}`}
       data-testid="summary-cards"
     >
@@ -52,7 +56,7 @@ export default function SummaryCards({
         <div className="flex items-center gap-2 text-sm font-medium text-brand">
           <PiggyBank className="h-4 w-4" aria-hidden="true" />
           Total savings
-        </div>
+        </section>
         <p
           data-testid="summary-total"
           className="mt-3 text-2xl font-semibold text-foreground"

@@ -18,7 +18,9 @@ use soroban_sdk::contracterror;
 /// - 90-99: Time-based operations
 /// - 110-119: Storage & State
 /// - 120-129: Rewards
-#[contracterror]
+/// - 130-139: Timelock
+/// - 140-149: Automation (rollover, conditional withdrawals)
+#[contracterror(export = false)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
@@ -41,6 +43,10 @@ pub enum Error {
     InsufficientBalance = 22,
     /// Invalid parameter combination provided.
     InvalidParameters = 25,
+    /// Address is malformed or not allowed for this operation.
+    InvalidAddress = 23,
+    /// Operation conflicts with the current state of the record.
+    ConflictingState = 24,
 
     // --- Locked Savings (30-39) ---
     /// Funds are still locked; unlock time has not been reached.
@@ -75,6 +81,8 @@ pub enum Error {
     // --- Arithmetic & Limits (60-69) ---
     /// A monetary computation would have overflowed or underflowed `i128`.
     Overflow = 60,
+    /// A division had a zero divisor.
+    DivisionByZero = 63,
     /// The admin-configured per-account deposit cap would be exceeded.
     DepositCapExceeded = 61,
 
@@ -94,6 +102,8 @@ pub enum Error {
     // --- Time-based Operations (90-99) ---
     /// Operation has expired.
     OperationExpired = 92,
+    /// Timestamp is missing or in the wrong order.
+    InvalidTimestamp = 91,
     /// Time window for operation has not opened yet.
     TimeWindowNotOpen = 93,
 
@@ -103,6 +113,16 @@ pub enum Error {
     /// A token callback attempted a nested token transfer.
     ReentrantCall = 115,
 
+    // --- Vault Split (100-109) ---
+    /// A split request already exists for this group and has not been executed.
+    SplitAlreadyRequested = 100,
+    /// This co-owner has already approved the pending split.
+    SplitAlreadyApproved = 101,
+    /// No pending (un-executed) split request exists for this id.
+    SplitNotPending = 102,
+    /// Not all co-owners have approved the split yet.
+    SplitNotFullyApproved = 103,
+
     // --- Rewards (120-129) ---
     /// The reward pool has insufficient funds; partial payment was made.
     RewardPoolShortfall = 120,
@@ -110,4 +130,40 @@ pub enum Error {
     InvalidRewardConfig = 121,
     /// No reward has accrued yet (nothing to claim).
     NoRewardAccrued = 122,
+
+    // --- Timelock (130-139) ---
+    /// Queued action ETA has not been reached yet.
+    TimelockNotReady = 130,
+    /// Queued action has passed its grace-period expiry.
+    TimelockExpired = 131,
+    /// Queued action has already been executed.
+    TimelockAlreadyExecuted = 132,
+    /// Queued action has been cancelled.
+    TimelockCancelled = 133,
+    /// Timelock delay is below the minimum allowed.
+    TimelockDelayTooShort = 134,
+    /// Timelock delay exceeds the maximum allowed.
+    TimelockDelayTooLong = 135,
+    // --- Group withdrawal approvals ---
+    /// A group withdrawal request was already rejected or executed.
+    WithdrawalRequestClosed = 123,
+
+    // --- Automation (140-149) ---
+    /// A conditional withdrawal's condition has not been met yet.
+    ConditionNotMet = 140,
+    /// A withdrawal condition is malformed (e.g. non-positive threshold or a
+    /// date that is already in the past).
+    InvalidCondition = 141,
+    /// No price oracle is configured, or the oracle call failed.
+    OracleUnavailable = 142,
+    // --- Inheritance / collateral / upgrade (repair) ---
+    CooldownActive = 90,
+    CollateralAlreadyEnabled = 150,
+    CollateralNotEnabled = 151,
+    CollateralLimitExceeded = 152,
+    PositionHealthy = 153,
+    CollateralWithdrawalBlocked = 154,
+    NotRegisteredLender = 155,
+    VaultAlreadyBacking = 156,
+    NoRollbackAvailable = 160,
 }

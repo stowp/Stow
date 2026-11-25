@@ -114,11 +114,15 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-5">
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="flex min-h-screen items-center justify-center bg-background px-5"
+    >
       <div className="w-full max-w-sm">
         <div className="mb-8 flex justify-center">
           <Logo />
-        </div>
+        </main>
 
         <div className="rounded-2xl border border-border bg-card p-8 text-center">
           <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-brand/20 to-brand-2/20 text-brand ring-1 ring-inset ring-brand/20">

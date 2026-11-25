@@ -14,7 +14,7 @@ export class TwoFactorAuth {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({ type: 'uuid' })
   userId: string;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
@@ -22,7 +22,7 @@ export class TwoFactorAuth {
   user: User;
 
   @Column({ nullable: true })
-  secret: string;
+  secret: string | null;
 
   @Column({ default: false })
   isEnabled: boolean;
@@ -31,16 +31,16 @@ export class TwoFactorAuth {
   isVerified: boolean;
 
   @Column({ type: 'simple-array', nullable: true })
-  backupCodes: string[];
+  backupCodes: string[] | null;
 
   @Column({ nullable: true })
-  lastUsedAt: Date;
+  lastUsedAt: Date | null;
 
   @Column({ default: 0 })
   failedAttempts: number;
 
   @Column({ nullable: true })
-  lockedUntil: Date;
+  lockedUntil: Date | null;
 
   @CreateDateColumn()
   createdAt: Date;

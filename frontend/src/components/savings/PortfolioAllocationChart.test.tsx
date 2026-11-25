@@ -27,6 +27,11 @@ describe("PortfolioAllocationChart", () => {
     render(<PortfolioAllocationChart summary={summary} isLoading={false} />);
 
     const flexibleSlice = screen.getByTestId("portfolio-allocation-slice-flexible");
+    const chart = screen.getByRole("group", { name: "Savings allocation by category" });
+    expect(chart).toHaveAccessibleDescription(
+      /Total savings: 750 XLM\. Flexible savings: 500 XLM, 66\.7 percent/,
+    );
+
     fireEvent.mouseEnter(flexibleSlice);
     expect(screen.getByTestId("portfolio-allocation-tooltip")).toHaveTextContent(
       "Flexible savings: 500 XLM (66.7%)",
@@ -37,6 +42,9 @@ describe("PortfolioAllocationChart", () => {
     expect(screen.getByTestId("portfolio-allocation-tooltip")).toHaveTextContent(
       "Flexible savings: 500 XLM (66.7%)",
     );
+
+    fireEvent.keyDown(flexibleSlice, { key: "Enter" });
+    expect(flexibleSlice).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows a clear empty state when all categories are zero", () => {

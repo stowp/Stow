@@ -1,6 +1,8 @@
 import {
   Controller,
   Get,
+  Post,
+  Body,
   Query,
   UseGuards,
   Request,
@@ -16,12 +18,18 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { ThrottleTier } from '../common/decorators/throttle-tier.decorator';
 import { AnalyticsService } from './analytics.service';
 import { AnalyticsAggregationService } from './analytics-aggregation.service';
+import { BenchmarkService } from './benchmark.service';
 import { AnalyticsQueryDto } from './dto/analytics-query.dto';
 import {
   DashboardKpiDto,
   MetricSummaryDto,
   AnalyticsTrendDto,
 } from './dto/dashboard-response.dto';
+import {
+  BenchmarkDataDto,
+  BenchmarkQueryDto,
+  RecordBenchmarkSnapshotDto,
+} from './dto/benchmark-data.dto';
 import { MetricType, AggregationPeriod } from './entities/analytics-metric.entity';
 
 interface AuthenticatedRequest {
@@ -39,7 +47,52 @@ export class AnalyticsController {
   constructor(
     private readonly analyticsService: AnalyticsService,
     private readonly aggregationService: AnalyticsAggregationService,
+    private readonly benchmarkService: BenchmarkService,
   ) {}
+
+  @Post('benchmark/snapshot')
+  @ThrottleTier('write')
+  @ApiOperation({ summary: 'Record a savings snapshot used for benchmarking' })
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: 'Snapshot recorded',
+  })
+  recordBenchmarkSnapshot(
+    @Body() body: RecordBenchmarkSnapshotDto,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    this.benchmarkService.recordSnapshot(req.user.id, body);
+    return {
+      success: true,
+      data: { period: body.period },
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  @Get('benchmark')
+  @ThrottleTier('read')
+  @ApiOperation({
+    summary: 'Compare savings performance with similar users (anonymized)',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Benchmark retrieved successfully',
+    type: BenchmarkDataDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'No savings data, or not enough peers to compare anonymously',
+  })
+  getBenchmark(
+    @Query() query: BenchmarkQueryDto,
+    @Request() req: AuthenticatedRequest,
+  ) {
+    return {
+      success: true,
+      data: this.benchmarkService.getBenchmark(req.user.id, query.period),
+      timestamp: new Date().toISOString(),
+    };
+  }
 
   @Get('dashboard')
   @ThrottleTier('read')

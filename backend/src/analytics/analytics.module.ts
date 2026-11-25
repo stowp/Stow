@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AnalyticsController } from './analytics.controller';
 import { AnalyticsService } from './analytics.service';
 import { AnalyticsAggregationService } from './analytics-aggregation.service';
+import { BenchmarkService } from './benchmark.service';
 import { AnalyticsMetric } from './entities/analytics-metric.entity';
 import { User } from '../users/entities/user.entity';
 
@@ -16,7 +17,7 @@ import { User } from '../users/entities/user.entity';
     },
   ])],
   controllers: [AnalyticsController],
-  providers: [AnalyticsService, AnalyticsAggregationService],
-  exports: [AnalyticsService, AnalyticsAggregationService],
+  providers: [AnalyticsService, AnalyticsAggregationService, BenchmarkService],
+  exports: [AnalyticsService, AnalyticsAggregationService, BenchmarkService],
 })
 export class AnalyticsModule {}

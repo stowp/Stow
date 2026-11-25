@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { unwrapApiData } from "@/lib/activity";
+import { cacheKeys, withOfflineCache } from "@/lib/offline";
 
 export interface FlexibleAccount {
   account: string;
@@ -41,24 +42,27 @@ export function useFlexibleBalance(
     setError(null);
 
     try {
-      const response = await apiFetch(
-        `/api/savings/accounts/${encodeURIComponent(address)}`,
+      // Cached for offline viewing; served from the cache when offline.
+      const { data } = await withOfflineCache(
+        cacheKeys.balance(address),
+        async (): Promise<FlexibleAccount | null> => {
+          const response = await apiFetch(
+            `/api/savings/accounts/${encodeURIComponent(address)}`,
+          );
+
+          if (response.status === 404) return null;
+
+          if (!response.ok) {
+            throw new ApiError(
+              `Failed to load flexible balance: ${response.statusText}`,
+              response.status,
+            );
+          }
+
+          return unwrapApiData<FlexibleAccount>(await response.json());
+        },
       );
-
-      if (response.status === 404) {
-        setAccount(null);
-        setStatus("ready");
-        return;
-      }
-
-      if (!response.ok) {
-        throw new ApiError(
-          `Failed to load flexible balance: ${response.statusText}`,
-          response.status,
-        );
-      }
-
-      setAccount(unwrapApiData<FlexibleAccount>(await response.json()));
+      setAccount(data);
       setStatus("ready");
     } catch (err) {
       setError(

@@ -1,39 +1,22 @@
 import { ApiProperty } from '@nestjs/swagger';
 
+/** Runtime metrics maintained by the indexer process. */
 export class IndexerMetricsDto {
   @ApiProperty()
-  events_per_second: number;
+  eventsProcessed: number;
 
   @ApiProperty()
-  lag_in_ledgers: number;
+  depositsProcessed: number;
 
   @ApiProperty()
-  total_events_processed: number;
+  withdrawalsProcessed: number;
 
   @ApiProperty()
-  deposits_processed: number;
+  eventsPerMinute: number;
 
   @ApiProperty()
-  withdrawals_processed: number;
+  lastProcessedAt: string;
 
   @ApiProperty()
-  pending_events: number;
-
-  @ApiProperty()
-  failed_events: number;
-
-  @ApiProperty()
-  dlq_events: number;
-
-  @ApiProperty()
-  last_processed_ledger: number;
-
-  @ApiProperty()
-  latest_contract_ledger: number;
-
-  @ApiProperty()
-  is_running: boolean;
-
-  @ApiProperty()
-  uptime_seconds: number;
+  uptimeSeconds: number;
 }

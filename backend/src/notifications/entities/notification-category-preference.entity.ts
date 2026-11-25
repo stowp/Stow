@@ -14,6 +14,7 @@ export enum NotificationCategory {
   MatchResolved = 'match_resolved',
   WinnerVerified = 'winner_verified',
   EventCancelled = 'event_cancelled',
+  GOALS = 'goals',
 }
 
 @Entity('notification_category_preferences')

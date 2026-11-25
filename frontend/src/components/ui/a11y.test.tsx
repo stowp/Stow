@@ -4,8 +4,18 @@ import ConfirmDialog from "./ConfirmDialog";
 import Toast from "./Toast";
 import ErrorRetry from "./ErrorRetry";
 import { expectNoSeriousViolations } from "@/test/axe";
+import AriaLive from "@/components/a11y/AriaLive";
 
 describe("UI component accessibility (axe)", () => {
+  it("announces updates using the configured politeness", () => {
+    const { rerender } = render(<AriaLive message="Savings summary loaded." />);
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByRole("status")).toHaveTextContent("Savings summary loaded.");
+
+    rerender(<AriaLive message="Could not load savings." politeness="assertive" />);
+    expect(screen.getByRole("alert")).toHaveAttribute("aria-live", "assertive");
+  });
+
   it("ConfirmDialog reports no serious violations in its open state", async () => {
     const { container } = render(
       <ConfirmDialog

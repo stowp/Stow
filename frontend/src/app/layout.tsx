@@ -5,10 +5,12 @@ import PageViewPing from "@/components/analytics/PageViewPing";
 import { ThemeProvider } from "@/context/ThemeProvider";
 import { SessionProvider } from "@/context/SessionProvider";
 import { I18nProvider } from "@/context/I18nProvider";
+import { MilestoneProvider } from "@/context/MilestoneProvider";
 import { SentryErrorBoundary } from "@/components/SentryErrorBoundary";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { UpdateNotification } from "@/components/UpdateNotification";
+import MilestoneCelebration from "@/components/notifications/MilestoneCelebration";
 import "./globals.css";
 
 const THEME_INIT_SCRIPT = `
@@ -91,11 +93,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <ThemeProvider>
             <I18nProvider>
               <SessionProvider>
-                {/* Skip link: first focusable element so keyboard & SR users can jump
-                    past the repeated header navigation straight to the page's main
-                    content (improves focus order / landmarks). */}
+                <MilestoneProvider>
                 <a
-                  href="#top"
+                  href="#main-content"
                   className="sr-only z-[100] rounded-lg px-4 py-2 text-sm font-semibold text-background focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:bg-brand focus:outline-none focus:ring-2 focus:ring-brand"
                 >
                   Skip to main content
@@ -106,7 +106,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <OfflineIndicator />
                 <PWAInstallPrompt />
                 <UpdateNotification />
+                <MilestoneCelebration />
                 {children}
+                </MilestoneProvider>
               </SessionProvider>
             </I18nProvider>
           </ThemeProvider>

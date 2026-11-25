@@ -18,6 +18,7 @@ import PortfolioAllocationChart from "@/components/savings/PortfolioAllocationCh
 import DepositModal from "@/components/savings/DepositModal";
 import WithdrawModal from "@/components/savings/WithdrawModal";
 import ErrorRetry from "@/components/ui/ErrorRetry";
+import AriaLive from "@/components/a11y/AriaLive";
 
 /** Assets offered in the deposit QR's SEP-7 payment request. USDC is only
  * included when its issuer is configured, since a SEP-7 request for a
@@ -50,6 +51,16 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background p-6">
+      <AriaLive
+        message={
+          status === "error"
+            ? "Could not load your savings summary."
+            : status === "ready"
+              ? "Your savings summary is available."
+              : ""
+        }
+        politeness={status === "error" ? "assertive" : "polite"}
+      />
       <div className="mx-auto max-w-4xl">
         <div className="mb-8 flex items-center gap-3">
           <LayoutDashboard className="h-8 w-8 text-brand" />

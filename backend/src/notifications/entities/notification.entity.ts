@@ -9,9 +9,13 @@ import {
 
 export enum NotificationType {
   GoalReached = 'goal_reached',
+  GoalMilestone = 'goal_milestone',
+  GoalContribution = 'goal_contribution',
   LockUnlocked = 'lock_unlocked',
   GroupSettled = 'group_settled',
   Deposit = 'deposit',
+  WithdrawalReady = 'withdrawal_ready',
+  YieldEarned = 'yield_earned',
 }
 
 @Entity('notifications')

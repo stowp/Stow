@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
+import { cacheKeys, withOfflineCache } from "@/lib/offline";
 
 export interface SavingsProductSummary {
   product: "flexible" | "goals";
@@ -41,18 +42,24 @@ export function useSavingsSummary(
     setError(null);
 
     try {
-      const response = await apiFetch(
-        `/api/savings/summary?address=${encodeURIComponent(address)}`,
+      // Cached for offline viewing; served from the cache when offline.
+      const { data } = await withOfflineCache(
+        cacheKeys.summary(address),
+        async (): Promise<SavingsSummary> => {
+          const response = await apiFetch(
+            `/api/savings/summary?address=${encodeURIComponent(address)}`,
+          );
+
+          if (!response.ok) {
+            throw new ApiError(
+              `Failed to load savings summary: ${response.statusText}`,
+              response.status,
+            );
+          }
+
+          return response.json();
+        },
       );
-
-      if (!response.ok) {
-        throw new ApiError(
-          `Failed to load savings summary: ${response.statusText}`,
-          response.status,
-        );
-      }
-
-      const data: SavingsSummary = await response.json();
       setSummary(data);
       setStatus("ready");
     } catch (err) {

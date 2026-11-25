@@ -1,4 +1,6 @@
 #![cfg(test)]
+#![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::cloned_ref_to_slice_refs)]
 //! Test skeleton. Each `#[ignore]`d test is a placeholder for a contributor.
 //!
 //! Pattern: register the contract, register a SEP-41 token (StellarAssetClient
@@ -8,18 +10,37 @@
 //! the given user, and returns everything the tests need.  Tests that only need
 //! the bare contract shell (no token) can still call [`setup`].
 
+extern crate std;
+
 use soroban_sdk::{
-    contract, contractclient, contractimpl,
+    contract, contractimpl,
     testutils::{Address as _, Events as _, Ledger, LedgerInfo},
     token::StellarAssetClient,
-    Address, BytesN, Env, IntoVal, Map, String,
+    Address, BytesN, Env, IntoVal, Map, String, TryFromVal, Vec,
 };
+
+use std::string::ToString;
 
 use crate::error::Error;
 use crate::events::{TOPIC_DEPOSIT, TOPIC_WITHDRAW};
 use crate::group_split;
-use crate::types::{CompoundFrequency, PermissionLevel};
+use crate::types::CompoundFrequency;
 use crate::{SavingsVault, SavingsVaultClient};
+
+#[path = "test/recurring_test.rs"]
+mod recurring_test;
+
+#[path = "test/multisig_test.rs"]
+mod multisig_test;
+
+#[path = "test/rollover_test.rs"]
+mod rollover_test;
+
+#[path = "test/conditional_test.rs"]
+mod conditional_test;
+
+#[path = "test/roundup_test.rs"]
+mod roundup_test;
 
 #[contract]
 struct ReentrantToken;
@@ -86,7 +107,7 @@ impl ReentrantToken {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn setup(env: &Env) -> SavingsVaultClient {
+fn setup(env: &Env) -> SavingsVaultClient<'_> {
     let contract_id = env.register(SavingsVault, ());
     SavingsVaultClient::new(env, &contract_id)
 }
@@ -95,7 +116,13 @@ fn setup(env: &Env) -> SavingsVaultClient {
 ///
 /// Returns `(client, admin, token_address)`.
 fn setup_with_token(env: &Env) -> (SavingsVaultClient, Address, Address) {
-    let client = setup(env);
+    let (client, admin, token_address, _) = setup_with_token_and_id(env);
+    (client, admin, token_address)
+}
+
+fn setup_with_token_and_id(env: &Env) -> (SavingsVaultClient, Address, Address, Address) {
+    let contract_id = env.register(SavingsVault, ());
+    let client = SavingsVaultClient::new(env, &contract_id);
     let admin = Address::generate(env);
     let token_admin = Address::generate(env);
 
@@ -105,12 +132,111 @@ fn setup_with_token(env: &Env) -> (SavingsVaultClient, Address, Address) {
 
     client.initialize(&admin, &token_address);
 
-    (client, admin, token_address)
+    (client, admin, token_address, contract_id)
+}
+
+/// One topic of an emitted event, decodable with the `as_*` helpers below.
+#[derive(Clone)]
+struct Topic {
+    env: Env,
+    val: soroban_sdk::Val,
+}
+
+impl Topic {
+    /// Event-name topics: the vault publishes `&str` names, which are stored
+    /// as soroban `String`s; `symbol_short!` names are `Symbol`s. Accept both.
+    fn as_symbol(&self) -> Option<std::string::String> {
+        if let Ok(symbol) = soroban_sdk::Symbol::try_from_val(&self.env, &self.val) {
+            return Some(symbol.to_string());
+        }
+        soroban_sdk::String::try_from_val(&self.env, &self.val)
+            .ok()
+            .map(|s| s.to_string())
+    }
+    fn as_address(&self) -> Option<Address> {
+        Address::try_from_val(&self.env, &self.val).ok()
+    }
+    fn as_u64(&self) -> Option<u64> {
+        u64::try_from_val(&self.env, &self.val).ok()
+    }
+}
+
+/// Topic list of an emitted event.
+#[derive(Clone)]
+struct Topics {
+    env: Env,
+    vals: Vec<soroban_sdk::Val>,
+}
+
+impl Topics {
+    fn len(&self) -> u32 {
+        self.vals.len()
+    }
+    fn get(&self, index: u32) -> Option<Topic> {
+        self.vals.get(index).map(|val| Topic {
+            env: self.env.clone(),
+            val,
+        })
+    }
+}
+
+/// One emitted contract event: the emitting contract, its topics and data.
+#[derive(Clone)]
+struct TestEvent {
+    contract: Address,
+    topics: Topics,
+    data: Option<soroban_sdk::Val>,
+}
+
+impl TestEvent {
+    /// The event as the `(contract, topics, data)` tuple the vault emits.
+    fn into_parts(
+        self,
+    ) -> (
+        Address,
+        soroban_sdk::Vec<soroban_sdk::Val>,
+        soroban_sdk::Val,
+    ) {
+        (
+            self.contract,
+            self.topics.vals,
+            self.data.expect("event data is always present"),
+        )
+    }
+}
+
+/// Snapshot of every event emitted so far, as [`TestEvent`]s.
+fn test_events(env: &Env) -> std::vec::Vec<TestEvent> {
+    env.events()
+        .all()
+        .iter()
+        .map(|(contract, topics, data)| TestEvent {
+            contract,
+            topics: Topics {
+                env: env.clone(),
+                vals: topics,
+            },
+            data: Some(data),
+        })
+        .collect()
+}
+
+/// Shared fixture for the challenge tests: vault, mock token, and a funded creator.
+pub(crate) fn register_vault(env: &Env) -> (SavingsVaultClient<'_>, Address, Address) {
+    let (client, _admin, token) = setup_with_token(env);
+    let creator = Address::generate(env);
+    (client, token, creator)
 }
 
 /// Mint `amount` stroops of the vault token to `recipient` (bypasses auth for
 /// test convenience).
-fn mint(env: &Env, token: &Address, token_admin: &Address, recipient: &Address, amount: i128) {
+pub(crate) fn mint(
+    env: &Env,
+    token: &Address,
+    _token_admin: &Address,
+    recipient: &Address,
+    amount: i128,
+) {
     let sac = StellarAssetClient::new(env, token);
     env.mock_all_auths();
     sac.mint(recipient, &amount);
@@ -133,6 +259,19 @@ fn set_ledger_time(env: &Env, timestamp: u64, sequence_number: u32) {
 
 fn advance_ledger(env: &Env) {
     set_ledger_time(env, env.ledger().timestamp(), env.ledger().sequence() + 1);
+}
+
+/// Mint `amount` to `owner` and deposit it into their flexible account.
+pub(crate) fn setup_flexible_account(
+    env: &Env,
+    vault: &SavingsVaultClient<'_>,
+    token: &Address,
+    owner: &Address,
+    amount: i128,
+) {
+    let admin = Address::generate(env);
+    mint(env, token, &admin, owner, amount);
+    vault.deposit(owner, &amount);
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +318,7 @@ fn flexible_deposit_gas_cost_stays_within_baseline() {
     let owner = Address::generate(&env);
     mint(&env, &token, &token_admin, &owner, 1_000);
 
-    let mut budget = env.budget();
+    let mut budget = env.cost_estimate().budget();
     budget.reset_default();
     client.deposit(&owner, &1_000);
 
@@ -909,13 +1048,13 @@ fn event_deposit_has_indexed_depositor() {
 
     client.deposit(&user, &AMOUNT);
 
-    let events = env.events().all();
+    let events = test_events(&env);
     let deposit_event = events
         .iter()
         .find(|e| {
             e.topics
                 .get(0)
-                .and_then(|t| t.as_symbol())
+                .and_then(|t| soroban_sdk::String::try_from_val(&env, &t.val).ok())
                 .map(|s| s.to_string() == TOPIC_DEPOSIT)
                 .unwrap_or(false)
         })
@@ -934,7 +1073,7 @@ fn event_deposit_has_indexed_depositor() {
         .get(1)
         .expect("second topic must be depositor address");
     assert!(
-        depositor_topic.as_address().is_some(),
+        soroban_sdk::Address::try_from_val(&env, &depositor_topic.val).is_ok(),
         "second topic must be an Address (indexed depositor)"
     );
 }
@@ -960,13 +1099,13 @@ fn event_goal_contribution_has_indexed_goal_id() {
     let goal_id = client.goal_create(&owner, &String::from_str(&env, "vacation"), &TARGET);
     client.goal_contribute(&owner, &goal_id, &CONTRIB);
 
-    let events = env.events().all();
+    let events = test_events(&env);
     let contribution_event = events
         .iter()
         .find(|e| {
             e.topics
                 .get(0)
-                .and_then(|t| t.as_symbol())
+                .and_then(|t| soroban_sdk::String::try_from_val(&env, &t.val).ok())
                 .map(|s| s.to_string() == "goal_contribution")
                 .unwrap_or(false)
         })
@@ -984,11 +1123,11 @@ fn event_goal_contribution_has_indexed_goal_id() {
         .get(1)
         .expect("second topic must be goal_id");
     assert!(
-        goal_id_topic.as_u64().is_some(),
+        u64::try_from_val(&env, &goal_id_topic.val).is_ok(),
         "second topic must be a u64 (indexed goal_id)"
     );
     assert_eq!(
-        goal_id_topic.as_u64().unwrap(),
+        u64::try_from_val(&env, &goal_id_topic.val).unwrap_or(0u64),
         goal_id,
         "indexed goal_id must match the actual goal"
     );
@@ -1012,13 +1151,13 @@ fn event_deposit_size_is_optimized() {
 
     client.deposit(&user, &AMOUNT);
 
-    let events = env.events().all();
+    let events = test_events(&env);
     let deposit_event = events
         .iter()
         .find(|e| {
             e.topics
                 .get(0)
-                .and_then(|t| t.as_symbol())
+                .and_then(|t| soroban_sdk::String::try_from_val(&env, &t.val).ok())
                 .map(|s| s.to_string() == TOPIC_DEPOSIT)
                 .unwrap_or(false)
         })
@@ -1067,7 +1206,7 @@ fn event_emission_gas_cost_is_reasonable() {
 
     let goal_id = client.goal_create(&owner, &String::from_str(&env, "savings"), &TARGET);
 
-    let mut budget = env.budget();
+    let mut budget = env.cost_estimate().budget();
     budget.reset_default();
 
     // Measure the cost of a single contribution with event emission.
@@ -1114,18 +1253,17 @@ fn event_group_contributions_are_individually_indexed() {
     // Each contribution should emit exactly one group_contribution event
     // with the group_id and contributor as indexed parameters.
     client.group_contribute(&creator, &group_id, &CONTRIB);
-    let events_after_first = env.events().all();
-    let first_contrib_events: Vec<_> = events_after_first
+    let events_after_first = test_events(&env);
+    let first_contrib_events: std::vec::Vec<&TestEvent> = events_after_first
         .iter()
         .filter(|e| {
             e.topics
                 .get(0)
-                .and_then(|t| t.as_symbol())
+                .and_then(|t| soroban_sdk::String::try_from_val(&env, &t.val).ok())
                 .map(|s| s.to_string() == "group_contribution")
                 .unwrap_or(false)
         })
         .collect();
-
     assert_eq!(
         first_contrib_events.len(),
         1,
@@ -1133,7 +1271,16 @@ fn event_group_contributions_are_individually_indexed() {
     );
 
     // Verify the event has indexed group_id and contributor.
-    let event = first_contrib_events[0];
+    let event = events_after_first
+        .iter()
+        .find(|e| {
+            e.topics
+                .get(0)
+                .and_then(|t| soroban_sdk::String::try_from_val(&env, &t.val).ok())
+                .map(|s| s.to_string() == "group_contribution")
+                .unwrap_or(false)
+        })
+        .expect("group_contribution event must exist");
     assert!(
         event.topics.len() >= 3,
         "group_contribution event must index group_id and contributor"
@@ -1143,11 +1290,15 @@ fn event_group_contributions_are_individually_indexed() {
     let contributor_topic = event.topics.get(2);
 
     assert!(
-        group_id_topic.and_then(|t| t.as_u64()).is_some(),
+        group_id_topic
+            .and_then(|t| u64::try_from_val(&env, &t.val).ok())
+            .is_some(),
         "second topic must be indexed group_id"
     );
     assert!(
-        contributor_topic.and_then(|t| t.as_address()).is_some(),
+        contributor_topic
+            .and_then(|t| soroban_sdk::Address::try_from_val(&env, &t.val).ok())
+            .is_some(),
         "third topic must be indexed contributor address"
     );
 }
@@ -1196,13 +1347,13 @@ fn event_locked_withdraw_has_indexed_parameters() {
 
     client.locked_withdraw(&owner, &plan_id, &AMOUNT);
 
-    let events = env.events().all();
+    let events = test_events(&env);
     let withdraw_event = events
         .iter()
         .find(|e| {
             e.topics
                 .get(0)
-                .and_then(|t| t.as_symbol())
+                .and_then(|t| soroban_sdk::String::try_from_val(&env, &t.val).ok())
                 .map(|s| s.to_string() == "locked_withdraw")
                 .unwrap_or(false)
         })
@@ -1218,17 +1369,19 @@ fn event_locked_withdraw_has_indexed_parameters() {
     let owner_topic = withdraw_event.topics.get(2);
 
     assert!(
-        plan_id_topic.and_then(|t| t.as_u64()).is_some(),
+        plan_id_topic.clone().and_then(|t| t.as_u64()).is_some(),
         "second topic must be indexed plan_id"
     );
     assert_eq!(
-        plan_id_topic.and_then(|t| t.as_u64()).unwrap(),
+        plan_id_topic.clone().and_then(|t| t.as_u64()).unwrap(),
         plan_id,
         "indexed plan_id must match"
     );
 
     assert!(
-        owner_topic.and_then(|t| t.as_address()).is_some(),
+        owner_topic
+            .and_then(|t| soroban_sdk::Address::try_from_val(&env, &t.val).ok())
+            .is_some(),
         "third topic must be indexed owner address"
     );
 }
@@ -1253,13 +1406,13 @@ fn event_goal_reached_is_size_optimized() {
     // Contribute exactly to target to trigger goal_reached event.
     client.goal_contribute(&owner, &goal_id, &TARGET);
 
-    let events = env.events().all();
+    let events = test_events(&env);
     let reached_event = events
         .iter()
         .find(|e| {
             e.topics
                 .get(0)
-                .and_then(|t| t.as_symbol())
+                .and_then(|t| soroban_sdk::String::try_from_val(&env, &t.val).ok())
                 .map(|s| s.to_string() == "goal_reached")
                 .unwrap_or(false)
         })
@@ -1280,11 +1433,11 @@ fn event_goal_reached_is_size_optimized() {
 
     let goal_id_topic = reached_event.topics.get(1);
     assert!(
-        goal_id_topic.and_then(|t| t.as_u64()).is_some(),
+        goal_id_topic.clone().and_then(|t| t.as_u64()).is_some(),
         "goal_reached must index goal_id"
     );
     assert_eq!(
-        goal_id_topic.and_then(|t| t.as_u64()).unwrap(),
+        goal_id_topic.clone().and_then(|t| t.as_u64()).unwrap(),
         goal_id,
         "indexed goal_id must match"
     );
@@ -1325,7 +1478,7 @@ fn event_interest_claimed_is_gas_efficient() {
         max_entry_ttl: 3_110_400,
     });
 
-    let mut budget = env.budget();
+    let mut budget = env.cost_estimate().budget();
     budget.reset_default();
 
     // Measure gas cost of interest claim with event emission
@@ -1344,13 +1497,13 @@ fn event_interest_claimed_is_gas_efficient() {
     );
 
     // Verify the event exists and has indexed parameters
-    let events = env.events().all();
+    let events = test_events(&env);
     let claimed_event = events
         .iter()
         .find(|e| {
             e.topics
                 .get(0)
-                .and_then(|t| t.as_symbol())
+                .and_then(|t| soroban_sdk::String::try_from_val(&env, &t.val).ok())
                 .map(|s| s.to_string() == "interest_claimed")
                 .unwrap_or(false)
         })
@@ -1368,10 +1521,9 @@ fn event_interest_claimed_is_gas_efficient() {
 /// (paired with `locked_withdraw_over_balance_rejected` above, which
 /// isolates the balance guard from the time-lock guard).
 #[test]
-fn locked_withdraw_before_unlock_rejected() {
+fn locked_withdraw_before_unlock_rejected_50_usdc() {
     let env = Env::default();
     env.mock_all_auths();
-
     let (client, _admin, token) = setup_with_token(&env);
     let token_admin = Address::generate(&env);
     let owner = Address::generate(&env);
@@ -2678,8 +2830,8 @@ fn deposit_emits_typed_event_with_expected_topic_and_data() {
     client.deposit(&user, &AMOUNT);
 
     let now = env.ledger().timestamp();
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
         (TOPIC_DEPOSIT, user.clone()).into_val(&env);
@@ -2711,8 +2863,8 @@ fn withdraw_emits_typed_event_with_expected_topic_and_data() {
     client.withdraw(&user, &WITHDRAW_AMOUNT);
 
     let now = env.ledger().timestamp();
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
     let remaining_balance = DEPOSIT_AMOUNT - WITHDRAW_AMOUNT;
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
@@ -2759,8 +2911,8 @@ fn locked_create_emits_typed_event_with_expected_topic_and_data() {
     let plan_id = client.locked_create(&owner, &AMOUNT, &unlock_at);
 
     let now = env.ledger().timestamp();
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
         (crate::events::TOPIC_LOCKED_CREATED, owner.clone(), plan_id).into_val(&env);
@@ -2801,8 +2953,8 @@ fn locked_early_withdraw_emits_typed_event_with_expected_topic_and_data() {
     let call_time = env.ledger().timestamp();
     client.locked_early_withdraw(&owner, &plan_id, &WITHDRAW);
 
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
         crate::events::TOPIC_LOCKED_EARLY_WITHDRAW,
@@ -2849,10 +3001,10 @@ fn goal_reached_emits_typed_event_with_expected_topic_and_data() {
     client.goal_contribute(&owner, &goal_id, &CONTRIBUTION);
 
     let now = env.ledger().timestamp();
-    let events = env.events().all();
+    let events = test_events(&env);
     // goal_contribute publishes goal_contribution then, in the same call,
     // goal_reached — the reached event is the last one emitted.
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
         (crate::events::TOPIC_GOAL_REACHED, owner.clone(), goal_id).into_val(&env);
@@ -2879,8 +3031,8 @@ fn goal_auto_renew_set_emits_typed_event_with_expected_topic_and_data() {
     client.goal_set_auto_renew(&owner, &goal_id, &true);
 
     let now = env.ledger().timestamp();
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
         crate::events::TOPIC_GOAL_AUTO_RENEW_SET,
@@ -2919,9 +3071,9 @@ fn goal_claim_auto_renew_emits_goal_renewed_event() {
     client.goal_claim(&owner, &goal_id);
 
     let now = env.ledger().timestamp();
-    let events = env.events().all();
+    let events = test_events(&env);
     // goal_claim publishes goal_claimed then goal_renewed — renewed is last.
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
         (crate::events::TOPIC_GOAL_RENEWED, owner.clone(), goal_id).into_val(&env);
@@ -2948,8 +3100,8 @@ fn group_create_emits_typed_event_with_expected_topic_and_data() {
     let group_id = client.group_create(&creator, &name);
 
     let now = env.ledger().timestamp();
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
         crate::events::TOPIC_GROUP_CREATED,
@@ -3008,7 +3160,7 @@ fn group_settle_emits_typed_events_with_expected_topic_and_data() {
     let member_b_payout = TOTAL * 4_000 / group_split::TOTAL_BPS as i128;
     let creator_payout = TOTAL - member_b_payout; // first member absorbs the rounding remainder
 
-    let events = env.events().all();
+    let events = test_events(&env);
     // `settle` also triggers a `transfer` event per member from the token
     // contract itself (a side effect of `token_client.transfer`), which is
     // interleaved with the vault's own `group_split_settled` events — so
@@ -3032,8 +3184,8 @@ fn group_settle_emits_typed_events_with_expected_topic_and_data() {
         soroban_sdk::Vec<soroban_sdk::Val>,
         soroban_sdk::Val,
     )> = soroban_sdk::Vec::new(&env);
-    for i in events_before_settle..events.len() {
-        let (contract_id, topics, data) = events.get(i).unwrap();
+    for i in (events_before_settle as usize)..events.len() {
+        let (contract_id, topics, data) = events.get(i).unwrap().clone().into_parts();
         if topics == expected_creator_topics || topics == expected_member_b_topics {
             settled_events.push_back((contract_id, topics, data));
         }
@@ -3189,8 +3341,8 @@ fn pause_and_unpause_emit_events() {
     client.pause(&admin);
     let paused_at = env.ledger().timestamp();
 
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.get(events.len() - 1).unwrap();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.get(events.len() - 1).unwrap().clone().into_parts();
     assert_eq!(contract_id, client.address);
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
         (crate::events::TOPIC_PAUSED,).into_val(&env);
@@ -3201,8 +3353,8 @@ fn pause_and_unpause_emit_events() {
     client.unpause(&admin);
     let unpaused_at = env.ledger().timestamp();
 
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.get(events.len() - 1).unwrap();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.get(events.len() - 1).unwrap().clone().into_parts();
     assert_eq!(contract_id, client.address);
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
         (crate::events::TOPIC_UNPAUSED,).into_val(&env);
@@ -3544,7 +3696,7 @@ fn group_vote_after_window_rejected() {
         &token,
         &token_admin,
         &creator,
-        &[member_b.clone()],
+        core::slice::from_ref(&member_b),
         VOTING_PERIOD,
     );
     let proposal_id = client.group_propose(&creator, &group_id, &recipient, &1_000_000);
@@ -3578,7 +3730,7 @@ fn group_execute_before_window_closed_rejected() {
         &token,
         &token_admin,
         &creator,
-        &[member_b.clone()],
+        core::slice::from_ref(&member_b),
         VOTING_PERIOD,
     );
     let proposal_id = client.group_propose(&creator, &group_id, &recipient, &1_000_000);
@@ -3611,7 +3763,7 @@ fn group_double_vote_rejected() {
         &token,
         &token_admin,
         &creator,
-        &[member_b.clone()],
+        core::slice::from_ref(&member_b),
         VOTING_PERIOD,
     );
     let proposal_id = client.group_propose(&creator, &group_id, &recipient, &1_000_000);
@@ -3644,7 +3796,7 @@ fn group_vote_by_non_member_rejected() {
         &token,
         &token_admin,
         &creator,
-        &[member_b.clone()],
+        core::slice::from_ref(&member_b),
         VOTING_PERIOD,
     );
     let proposal_id = client.group_propose(&creator, &group_id, &recipient, &1_000_000);
@@ -3721,7 +3873,7 @@ fn group_execute_twice_rejected() {
         &token,
         &token_admin,
         &creator,
-        &[member_b.clone()],
+        core::slice::from_ref(&member_b),
         VOTING_PERIOD,
     );
     let proposal_id = client.group_propose(&creator, &group_id, &recipient, &1_000_000);
@@ -3788,8 +3940,8 @@ fn group_propose_emits_typed_event_with_expected_topic_and_data() {
     let now = env.ledger().timestamp();
     let proposal_id = client.group_propose(&creator, &group_id, &recipient, &SPEND);
 
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
         crate::events::TOPIC_GROUP_PROPOSAL_CREATED,
@@ -3842,8 +3994,8 @@ fn group_vote_emits_typed_event_with_expected_topic_and_data() {
     let now = env.ledger().timestamp();
     client.group_vote(&creator, &proposal_id, &true);
 
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
         crate::events::TOPIC_GROUP_VOTE_CAST,
@@ -3891,8 +4043,8 @@ fn group_execute_emits_typed_event_with_expected_topic_and_data() {
     let now = env.ledger().timestamp();
     client.group_execute(&creator, &proposal_id);
 
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
         crate::events::TOPIC_GROUP_PROPOSAL_EXECUTED,
@@ -4100,6 +4252,9 @@ fn interest_withdraw_draws_on_accrued_interest() {
     );
 
     set_ledger_time(&env, MONTH, 2);
+    // Accrued interest is paid out of the vault's token balance, so fund the
+    // vault with the interest it will owe before withdrawing.
+    mint(&env, &token, &token_admin, &client.address, 10_000);
     // Settled principal is 1_010_000; withdraw more than the original deposit.
     client.interest_withdraw(&owner, &1_005_000);
 
@@ -4258,8 +4413,8 @@ fn interest_claim_emits_typed_event() {
     set_ledger_time(&env, MONTH, 2);
     client.interest_claim(&owner);
 
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
         (crate::events::TOPIC_INTEREST_CLAIMED, owner.clone()).into_val(&env);
@@ -4283,8 +4438,8 @@ fn interest_deposit_emits_typed_event() {
 
     client.interest_deposit(&owner, &INTEREST_PRINCIPAL);
 
-    let events = env.events().all();
-    let (contract_id, topics, data) = events.last().unwrap().clone();
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
 
     let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
         (crate::events::TOPIC_INTEREST_DEPOSIT, owner.clone()).into_val(&env);
@@ -5036,10 +5191,7 @@ fn emergency_withdraw_from_locked_plan() {
 
     client.locked_emergency_withdraw(&owner, &plan_id);
 
-    assert_eq!(
-        token_client.balance(&owner) - balance_before,
-        LOCKED_AMOUNT,
-    );
+    assert_eq!(token_client.balance(&owner) - balance_before, LOCKED_AMOUNT,);
     assert_eq!(client.locked_plan(&plan_id).balance, 0);
 }
 
@@ -5259,10 +5411,7 @@ fn insurance_approve_and_redeem_claim() {
         token_client.balance(&claimant) - balance_before,
         CLAIM_AMOUNT
     );
-    assert_eq!(
-        client.insurance_fund_balance(),
-        FUND_AMOUNT - CLAIM_AMOUNT
-    );
+    assert_eq!(client.insurance_fund_balance(), FUND_AMOUNT - CLAIM_AMOUNT);
 
     let claim = client.insurance_claim(&claimant);
     assert!(claim.redeemed);
@@ -5334,4 +5483,459 @@ fn insurance_premium_collected_on_deposit() {
         client.get_account(&user).balance,
         DEPOSIT - EXPECTED_PREMIUM,
     );
+}
+
+/// Partial liquidation pays the penalty only on the liquidated slice, keeps
+/// the remainder in the plan, and supports repeated liquidations.
+#[test]
+fn partial_liquidate_penalizes_slice_and_preserves_remainder() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    const LOCKED: i128 = 100_000_000; // 100 USDC
+    const PENALTY_BPS: u32 = 500; // 5%
+    mint(&env, &token, &token_admin, &owner, LOCKED);
+    client.set_early_withdraw_penalty_bps(&PENALTY_BPS);
+    client.set_penalty_recipient(&recipient);
+
+    let now: u64 = 1_000_000;
+    set_ledger_time(&env, now, 100);
+    let plan_id = client.locked_create(&owner, &LOCKED, &(now + 10_000));
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+    let owner_before = token_client.balance(&owner);
+
+    // Liquidate 25% -> 25 USDC slice, 1.25 USDC penalty.
+    let liquidated = client.partial_liquidate(&owner, &plan_id, &2_500);
+    assert_eq!(liquidated, 25_000_000);
+    assert_eq!(token_client.balance(&owner) - owner_before, 23_750_000);
+    assert_eq!(token_client.balance(&recipient), 1_250_000);
+    assert_eq!(client.locked_plan(&plan_id).balance, 75_000_000);
+
+    // Second liquidation of 50% applies to the remaining 75 USDC -> 37.5 USDC.
+    let liquidated_again = client.partial_liquidate(&owner, &plan_id, &5_000);
+    assert_eq!(liquidated_again, 37_500_000);
+    assert_eq!(client.locked_plan(&plan_id).balance, 37_500_000);
+    assert_eq!(token_client.balance(&recipient), 1_250_000 + 1_875_000);
+}
+
+/// Invalid percentages, non-owners, and zero-sized slices are rejected.
+#[test]
+fn partial_liquidate_rejects_invalid_input() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    mint(&env, &token, &token_admin, &owner, 1_000_000);
+    let now: u64 = 1_000_000;
+    set_ledger_time(&env, now, 100);
+    let plan_id = client.locked_create(&owner, &1_000_000, &(now + 10_000));
+
+    assert_eq!(
+        client.try_partial_liquidate(&owner, &plan_id, &0),
+        Err(Ok(Error::InvalidParameters)),
+    );
+    assert_eq!(
+        client.try_partial_liquidate(&owner, &plan_id, &10_001),
+        Err(Ok(Error::InvalidParameters)),
+    );
+    assert_eq!(
+        client.try_partial_liquidate(&other, &plan_id, &1_000),
+        Err(Ok(Error::Unauthorized)),
+    );
+    // A 1 bp slice of a 9_999-unit plan floors to 0 -> InvalidAmount.
+    mint(&env, &token, &token_admin, &owner, 9_999);
+    let dust_plan = client.locked_create(&owner, &9_999, &(now + 10_000));
+    assert_eq!(
+        client.try_partial_liquidate(&owner, &dust_plan, &1),
+        Err(Ok(Error::InvalidAmount)),
+    );
+    assert_eq!(client.locked_plan(&dust_plan).balance, 9_999);
+    assert_eq!(client.locked_plan(&plan_id).balance, 1_000_000);
+}
+
+/// `partial_liquidate` emits a `PartialLiquidation` event with the slice,
+/// penalty and remaining balance.
+#[test]
+fn partial_liquidate_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+
+    const AMOUNT: i128 = 40_000_000;
+    mint(&env, &token, &token_admin, &owner, AMOUNT);
+    client.set_early_withdraw_penalty_bps(&500);
+
+    let now: u64 = 3_000_000;
+    set_ledger_time(&env, now, 100);
+    let plan_id = client.locked_create(&owner, &AMOUNT, &(now + 10_000));
+
+    set_ledger_time(&env, now + 1, 101);
+    client.partial_liquidate(&owner, &plan_id, &5_000);
+
+    let events = test_events(&env);
+    let (contract_id, topics, data) = events.last().unwrap().clone().into_parts();
+    let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
+        crate::events::TOPIC_PARTIAL_LIQUIDATION,
+        owner.clone(),
+        plan_id,
+    )
+        .into_val(&env);
+    let decoded: (u64, Address, i128, i128, i128, u64) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+
+    assert_eq!(contract_id, client.address);
+    assert_eq!(topics, expected_topics);
+    // 50% of 40 USDC = 20 USDC; penalty 5% of 20 = 1 USDC; remaining 20 USDC.
+    assert_eq!(
+        decoded,
+        (plan_id, owner, 20_000_000, 1_000_000, 20_000_000, now + 1)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Additional comprehensive tests for edge cases and advanced scenarios
+// ---------------------------------------------------------------------------
+
+/// Test that multiple goals can be created and managed independently by the
+/// same owner, ensuring state isolation between different savings goals.
+#[test]
+fn multiple_goals_per_owner_maintain_independent_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+
+    const TOTAL_FUNDS: i128 = 300_000_000;
+    mint(&env, &token, &token_admin, &owner, TOTAL_FUNDS);
+
+    // Create three distinct goals with different targets
+    let goal_1 = client.goal_create(&owner, &String::from_str(&env, "vacation"), &100_000_000);
+    let goal_2 = client.goal_create(&owner, &String::from_str(&env, "emergency"), &150_000_000);
+    let goal_3 = client.goal_create(&owner, &String::from_str(&env, "car"), &50_000_000);
+
+    // Contribute to each goal independently
+    client.goal_contribute(&owner, &goal_1, &60_000_000);
+    client.goal_contribute(&owner, &goal_2, &100_000_000);
+    client.goal_contribute(&owner, &goal_3, &50_000_000);
+
+    // Verify each goal maintains its own state
+    let g1 = client.goal(&goal_1);
+    assert_eq!(g1.saved_amount, 60_000_000);
+    assert_eq!(g1.target_amount, 100_000_000);
+    assert!(g1.reached_at.is_none());
+
+    let g2 = client.goal(&goal_2);
+    assert_eq!(g2.saved_amount, 100_000_000);
+    assert_eq!(g2.target_amount, 150_000_000);
+    assert!(g2.reached_at.is_none());
+
+    let g3 = client.goal(&goal_3);
+    assert_eq!(g3.saved_amount, 50_000_000);
+    assert_eq!(g3.target_amount, 50_000_000);
+    assert!(g3.reached_at.is_some(), "goal 3 should be reached");
+
+    // Claim only the reached goal
+    advance_ledger(&env);
+    client.goal_claim(&owner, &goal_3);
+
+    // Verify goal 3 is closed while others remain active
+    assert_eq!(client.try_goal(&goal_3), Err(Ok(Error::NotFound)));
+    assert_eq!(client.goal(&goal_1).saved_amount, 60_000_000);
+    assert_eq!(client.goal(&goal_2).saved_amount, 100_000_000);
+}
+
+/// Test compound interest calculation accuracy over multiple periods with
+/// different frequencies, ensuring no drift or accumulation errors.
+#[test]
+fn compound_interest_accuracy_across_multiple_frequencies() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+
+    // Test monthly compounding accuracy
+    let owner_monthly = setup_interest(
+        &env,
+        &client,
+        &admin,
+        &token,
+        &token_admin,
+        1200, // 12% annual
+        CompoundFrequency::Monthly,
+    );
+
+    // Advance 12 months and verify compound growth
+    set_ledger_time(&env, 12 * MONTH, 2);
+    let accrued_monthly = client.interest_accrued(&owner_monthly);
+    
+    // With 12% annual compounded monthly: (1 + 0.01)^12 ≈ 1.126825
+    // Expected: ~126,825 (12.6825% effective annual rate)
+    assert!(
+        accrued_monthly >= 126_000 && accrued_monthly <= 127_000,
+        "monthly compounding over 12 periods should yield ~126,825, got {}",
+        accrued_monthly
+    );
+
+    // Test annual compounding
+    let owner_annual = setup_interest(
+        &env,
+        &client,
+        &admin,
+        &token,
+        &token_admin,
+        1200,
+        CompoundFrequency::Annually,
+    );
+
+    set_ledger_time(&env, YEAR, 3);
+    let accrued_annual = client.interest_accrued(&owner_annual);
+    
+    // With 12% annual compounded annually: 1.12 - 1 = 0.12
+    // Expected: exactly 120,000 (12%)
+    assert_eq!(
+        accrued_annual, 120_000,
+        "annual compounding should yield exactly 12%"
+    );
+
+    // Verify monthly compounds to more than annual (time value of money)
+    assert!(
+        accrued_monthly > accrued_annual,
+        "monthly compounding should yield more than annual: {} vs {}",
+        accrued_monthly,
+        accrued_annual
+    );
+}
+
+/// Test that reward streaks properly handle boundary conditions including
+/// streak preservation across claims, maximum streak caps, and reset logic.
+#[test]
+fn reward_streak_boundary_conditions_and_caps() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, token) = setup_with_token(&env);
+    let (owner, _) = setup_rewards(&env, &client, &admin, &token);
+
+    // Build a long streak by consistently pinging
+    for week in 1..=10 {
+        client.reward_ping(&owner);
+        set_ledger_time(&env, WEEK * week, (week + 1) as u32);
+        client.reward_accrue(&owner);
+    }
+
+    let state = client.reward_state(&owner).unwrap();
+    assert_eq!(state.streak, 10, "streak should reach 10 consecutive periods");
+
+    // Verify streak bonus is applied and capped
+    let config = client.reward_config();
+    let expected_bonus = core::cmp::min(
+        10 * config.streak_bonus_bps_per_period,
+        config.streak_bonus_cap_bps,
+    );
+    let actual_bonus = crate::rewards::streak_bonus_bps(state.streak, &config);
+    assert_eq!(
+        actual_bonus, expected_bonus,
+        "streak bonus should be capped at config maximum"
+    );
+
+    // Claim and verify streak persists
+    let pending_before = state.pending;
+    let claimed = client.reward_claim(&owner);
+    assert_eq!(claimed, pending_before);
+    assert_eq!(
+        client.reward_state(&owner).unwrap().streak,
+        10,
+        "claiming should not reset streak"
+    );
+
+    // Continue streak beyond cap
+    for week in 11..=20 {
+        client.reward_ping(&owner);
+        set_ledger_time(&env, WEEK * week, (week + 1) as u32);
+        client.reward_accrue(&owner);
+    }
+
+    let capped_bonus = crate::rewards::streak_bonus_bps(20, &config);
+    assert_eq!(
+        capped_bonus, config.streak_bonus_cap_bps,
+        "extended streak should still be capped"
+    );
+
+    // Break the streak by missing one period
+    set_ledger_time(&env, WEEK * 22, 23);
+    client.reward_accrue(&owner);
+    assert_eq!(
+        client.reward_state(&owner).unwrap().streak,
+        0,
+        "missed period should reset streak to 0"
+    );
+}
+
+/// Test insurance fund operations including premium collection, claim approval
+/// workflow, partial fund depletion, and claim size limits.
+#[test]
+fn insurance_fund_comprehensive_operations() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+
+    // Configure insurance: 2% premium, 10% max claim
+    client.set_insurance_premium_bps(&admin, &200);
+    client.set_insurance_max_claim_bps(&admin, &1_000);
+
+    // Fund initial insurance pool
+    const INITIAL_FUND: i128 = 500_000_000; // 500 USDC
+    mint(&env, &token, &token_admin, &admin, INITIAL_FUND);
+    client.insurance_fund(&admin, &INITIAL_FUND);
+    assert_eq!(client.insurance_fund_balance(), INITIAL_FUND);
+
+    // User deposits trigger premium collection
+    let user1 = Address::generate(&env);
+    const DEPOSIT1: i128 = 100_000_000;
+    mint(&env, &token, &token_admin, &user1, DEPOSIT1);
+    client.deposit(&user1, &DEPOSIT1);
+
+    let expected_premium1 = DEPOSIT1 * 200 / 10_000; // 2 USDC
+    let new_fund_balance = INITIAL_FUND + expected_premium1;
+    assert_eq!(client.insurance_fund_balance(), new_fund_balance);
+
+    // Multiple claims from different users
+    let claimant1 = Address::generate(&env);
+    let claimant2 = Address::generate(&env);
+    let claimant3 = Address::generate(&env);
+
+    const CLAIM1: i128 = 30_000_000;
+    const CLAIM2: i128 = 20_000_000;
+    const CLAIM3: i128 = 15_000_000;
+
+    client.insurance_approve_claim(&admin, &claimant1, &CLAIM1);
+    client.insurance_approve_claim(&admin, &claimant2, &CLAIM2);
+    client.insurance_approve_claim(&admin, &claimant3, &CLAIM3);
+
+    // Redeem claims in different order
+    client.insurance_redeem_claim(&claimant2);
+    client.insurance_redeem_claim(&claimant1);
+
+    let expected_remaining = new_fund_balance - CLAIM1 - CLAIM2;
+    assert_eq!(client.insurance_fund_balance(), expected_remaining);
+
+    // Verify unredeemed claim still exists
+    let claim3 = client.insurance_claim(&claimant3);
+    assert!(!claim3.redeemed);
+    assert_eq!(claim3.amount, CLAIM3);
+
+    // Attempt to claim beyond max_claim_bps (10% of remaining fund)
+    let greedy = Address::generate(&env);
+    let max_allowed = expected_remaining * 1_000 / 10_000;
+    let result = client.try_insurance_approve_claim(&admin, &greedy, &(max_allowed + 1));
+    assert_eq!(result, Err(Ok(Error::DepositCapExceeded)));
+
+    // Approve and redeem maximum allowed claim
+    client.insurance_approve_claim(&admin, &greedy, &max_allowed);
+    client.insurance_redeem_claim(&greedy);
+
+    // Fund can be replenished
+    mint(&env, &token, &token_admin, &admin, 100_000_000);
+    client.insurance_fund(&admin, &100_000_000);
+    assert!(client.insurance_fund_balance() > expected_remaining - max_allowed);
+}
+
+/// Test emergency mode interactions with various vault operations including
+/// pause/unpause sequences, emergency withdrawals, and state transitions.
+#[test]
+fn emergency_mode_comprehensive_state_transitions() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, token) = setup_with_token(&env);
+    let token_admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    const DEPOSIT: i128 = 100_000_000;
+    const LOCKED: i128 = 50_000_000;
+
+    // Set up initial state: flexible deposit and locked plan
+    mint(&env, &token, &token_admin, &user, DEPOSIT + LOCKED);
+    client.deposit(&user, &DEPOSIT);
+
+    let now: u64 = 1_000_000;
+    set_ledger_time(&env, now, 100);
+    let plan_id = client.locked_create(&user, &LOCKED, &(now + 100_000));
+
+    // Verify normal operations work
+    assert!(!client.is_paused());
+    assert!(!client.is_emergency_mode());
+
+    // Activate pause (not emergency) - blocks all mutations
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    let deposit_result = client.try_deposit(&user, &1_000_000);
+    assert_eq!(deposit_result, Err(Ok(Error::Paused)));
+
+    let withdraw_result = client.try_withdraw(&user, &1_000_000);
+    assert_eq!(withdraw_result, Err(Ok(Error::Paused)));
+
+    // Emergency withdraw still blocked without emergency mode
+    let emergency_result = client.try_locked_emergency_withdraw(&user, &plan_id);
+    assert_eq!(emergency_result, Err(Ok(Error::NotPaused)));
+
+    // Transition to emergency mode (automatically unpauses)
+    client.unpause(&admin);
+    client.set_emergency_mode(&admin, &true);
+    assert!(!client.is_paused());
+    assert!(client.is_emergency_mode());
+
+    // In emergency mode: deposits blocked, withdrawals allowed, emergency withdrawals enabled
+    let deposit_result = client.try_deposit(&user, &1_000_000);
+    assert_eq!(deposit_result, Err(Ok(Error::EmergencyShutdown)));
+
+    client.withdraw(&user, &10_000_000);
+    assert_eq!(client.get_account(&user).balance, DEPOSIT - 10_000_000);
+
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+    let balance_before_emergency = token_client.balance(&user);
+    client.locked_emergency_withdraw(&user, &plan_id);
+    assert_eq!(
+        token_client.balance(&user) - balance_before_emergency,
+        LOCKED
+    );
+    assert_eq!(client.locked_plan(&plan_id).balance, 0);
+
+    // Can transition back to normal
+    client.set_emergency_mode(&admin, &false);
+    assert!(!client.is_emergency_mode());
+
+    // Normal operations resume
+    mint(&env, &token, &token_admin, &user, 1_000_000);
+    client.deposit(&user, &1_000_000);
+
+    // Can activate both pause and emergency simultaneously
+    client.pause(&admin);
+    client.set_emergency_mode(&admin, &true);
+    assert!(client.is_paused());
+    assert!(client.is_emergency_mode());
+
+    // Emergency withdrawal works even when paused
+    let plan_id2 = client.locked_create(&user, &10_000_000, &(now + 100_000));
+    client.locked_emergency_withdraw(&user, &plan_id2);
+    assert_eq!(client.locked_plan(&plan_id2).balance, 0);
 }

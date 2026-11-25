@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { CircleHelp, Menu, X } from "lucide-react";
 import { useSession } from "@/context/SessionProvider";
@@ -8,6 +8,8 @@ import Sidebar from "@/components/app/Sidebar";
 import AddressBadge from "@/components/app/AddressBadge";
 import OnboardingTour from "@/components/app/OnboardingTour";
 import AppAccessLock from "@/components/app/AppAccessLock";
+import ThemeToggle from "@/components/app/ThemeToggle";
+import { useFocusManagement } from "@/hooks/useFocusManagement";
 import {
   BIOMETRIC_ACCESS_CHANGED_EVENT,
   readBiometricAccessSettings,
@@ -38,6 +40,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const [deviceAccess, setDeviceAccess] = useState<DeviceAccessState | null>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  useFocusManagement(mainRef, pathname ?? "");
 
   const currentUserId = user?.id;
 
@@ -105,17 +109,25 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (loading || !user) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex min-h-screen items-center justify-center bg-background"
+      >
         <span className="text-sm text-muted">Loading…</span>
-      </div>
+      </main>
     );
   }
 
   if (!deviceAccess || deviceAccess.userId !== user.id) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex min-h-screen items-center justify-center bg-background"
+      >
         <span className="text-sm text-muted">Preparing app access...</span>
-      </div>
+      </main>
     );
   }
 
@@ -135,7 +147,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:rounded-lg focus:bg-card focus:px-4 focus:py-2 focus:text-foreground focus:outline-none focus:ring-2 focus:ring-brand"
+      >
+        Skip to main content
+      </a>
+      <div className="flex min-h-screen bg-background">
       <Sidebar
         onSignOut={signOut}
         className="sticky top-0 hidden h-screen shrink-0 md:flex"
@@ -181,6 +200,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               </span>
             )}
             {address && <AddressBadge address={address} />}
+            <ThemeToggle />
             <button
               type="button"
               onClick={() => setTourOpen(true)}
@@ -194,9 +214,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1">{children}</main>
+        <main id="main-content" ref={mainRef} tabIndex={-1} className="flex-1">
+          {children}
+        </main>
       </div>
       {tourOpen && <OnboardingTour onClose={() => setTourOpen(false)} />}
     </div>
+    </>
   );
 }

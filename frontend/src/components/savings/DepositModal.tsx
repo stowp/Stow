@@ -193,6 +193,16 @@ export default function DepositModal({
               )}
             </div>
 
+            {status === "queued" && (
+              <div
+                role="status"
+                className="rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-500"
+              >
+                You&apos;re offline. This deposit has been queued and will be
+                sent automatically when you reconnect.
+              </div>
+            )}
+
             {status === "error" && (
               <div
                 role="alert"

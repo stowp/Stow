@@ -100,7 +100,7 @@ pub fn load_config(env: &Env) -> TieredRateConfig {
     env.storage()
         .instance()
         .get(&DataKey::TieredRateConfig)
-        .unwrap_or_else(|| TieredRateConfig {
+        .unwrap_or(TieredRateConfig {
             tier_low_rate_bps: DEFAULT_TIER_LOW_RATE_BPS,
             tier_mid_rate_bps: DEFAULT_TIER_MID_RATE_BPS,
             tier_high_rate_bps: DEFAULT_TIER_HIGH_RATE_BPS,
@@ -155,6 +155,16 @@ pub fn lock_period_bonus(config: &TieredRateConfig, lock_secs: u64) -> u32 {
 ///
 /// The result is the balance-tier base rate plus the lock-period bonus,
 /// capped at 10 000 bps (100 %) to prevent arithmetic surprises downstream.
+/// The rate an account should earn. Tiered rates apply only once an admin has
+/// stored a [`TieredRateConfig`]; until then the account keeps `admin_rate_bps`.
+pub fn rate_for(env: &Env, balance: i128, lock_secs: u64, admin_rate_bps: u32) -> u32 {
+    if env.storage().instance().has(&DataKey::TieredRateConfig) {
+        effective_rate_bps(env, balance, lock_secs)
+    } else {
+        admin_rate_bps
+    }
+}
+
 pub fn effective_rate_bps(env: &Env, balance: i128, lock_secs: u64) -> u32 {
     let config = load_config(env);
     let base = balance_tier_rate(&config, balance);

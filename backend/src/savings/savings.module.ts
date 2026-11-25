@@ -9,9 +9,12 @@ import { AnchorDeposit } from './entities/anchor-deposit.entity';
 import { Balance } from './entities/balance.entity';
 import { Group } from './entities/group.entity';
 import { GroupMember } from './entities/group-member.entity';
+import { AccountTypeEntity } from './entities/account-type.entity';
 import { BalanceService } from './balance.service';
 import { GroupsService } from './groups.service';
 import { LockedPlansService } from './locked-plans.service';
+import { AccountComparisonService } from './account-comparison.service';
+import { AccountComparisonController } from './account-comparison.controller';
 import { BalanceController } from './balance.controller';
 import { SavingsController } from './savings.controller';
 import { SavingsService } from './savings.service';
@@ -21,19 +24,20 @@ import { ReferralModule } from '../referral/referral.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AnchorDeposit, Balance, Group, GroupMember, YieldPosition]),
+    TypeOrmModule.forFeature([AnchorDeposit, Balance, Group, GroupMember, YieldPosition, AccountTypeEntity]),
     CacheModule.register({ ttl: 10_000 }),
     GoalsModule,
     ReferralModule,
   ],
-  controllers: [AnchorController, AnchorCallbackController, BalanceController, SavingsController],
+  controllers: [AnchorController, AnchorCallbackController, BalanceController, SavingsController, AccountComparisonController],
   providers: [
     AnchorService,
     BalanceService,
     GroupsService,
     LockedPlansService,
     SavingsService,
+    AccountComparisonService,
   ],
-  exports: [AnchorService, BalanceService, GroupsService, LockedPlansService],
+  exports: [AnchorService, BalanceService, GroupsService, LockedPlansService, AccountComparisonService],
 })
 export class SavingsModule {}

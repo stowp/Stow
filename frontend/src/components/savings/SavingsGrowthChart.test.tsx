@@ -26,7 +26,7 @@ describe("SavingsGrowthChart", () => {
 
     const chart = screen.getByRole("img", { name: "Projected savings growth" });
     expect(chart).toHaveAccessibleDescription(
-      /from 1K to .* over 10y, of which 13K is principal and .* is interest/,
+      /from 1K to .* over 10 years, of which 13K is principal and .* is interest/,
     );
   });
 

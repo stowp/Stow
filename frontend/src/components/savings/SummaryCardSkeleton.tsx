@@ -11,14 +11,12 @@ export default function SummaryCardSkeleton({
 }: SummaryCardSkeletonProps) {
   return (
     <div
-      role="status"
-      aria-label="Loading summary"
+      aria-hidden="true"
       className={`animate-pulse rounded-2xl border border-border bg-card p-6 ${className}`}
     >
       <div className="h-3 w-24 rounded bg-foreground/5" />
       <div className="mt-3 h-7 w-32 rounded bg-foreground/5" />
       <div className="mt-4 h-2 w-full rounded bg-foreground/5" />
-      <span className="sr-only">Loading summary</span>
     </div>
   );
 }

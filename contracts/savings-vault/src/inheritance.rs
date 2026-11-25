@@ -1,36 +1,44 @@
-//! Savings inheritance — issue #439.
+//! Savings vault inheritance planning (#635).
 //!
-//! Lets an account owner designate one or more beneficiaries who may claim
-//! the balance if the owner has been inactive for a configurable timeout.
+//! Lets an owner hand their flexible savings to one or more beneficiaries
+//! gradually, rather than in one irreversible step.
 //!
-//! # How it works
+//! # Lifecycle
 //!
-//! 1. **Designate** — The owner calls [`designate_beneficiary`] with an
-//!    address and a share in basis points (1/100 of a percent). Multiple
-//!    beneficiaries may be designated; their shares must sum to exactly
-//!    `10_000` bps (100%) before the inheritance is active.
-//! 2. **Timeout** — The owner sets an inactivity timeout in seconds with
-//!    [`set_inactivity_timeout`]. Any interaction with the flexible-savings
-//!    module (deposit or withdraw) resets the owner's `last_active_at`
-//!    timestamp. Once `now >= last_active_at + timeout`, the account is
-//!    considered inactive and beneficiaries may claim.
-//! 3. **Claim** — A beneficiary calls [`claim_inheritance`] with the
-//!    owner's address. If the timeout has elapsed, each beneficiary's
-//!    proportional share of the flexible balance is transferred to them.
-//!    The claim is atomic: if any transfer fails the entire call reverts
-//!    with the original balance intact.
+//! 1. **Setup** — The owner calls [`setup_inheritance`] with a map of
+//!    beneficiaries to shares (basis points summing to exactly `10_000`),
+//!    an inactivity period, a partial-access percentage and an optional
+//!    proof-of-death verifier. Emits `InheritanceSetup`.
+//! 2. **Activity** — Every owner deposit or withdrawal (and the explicit
+//!    [`check_in`]) resets the inactivity clock. A live owner also voids any
+//!    proof of death that was attested against them.
+//! 3. **Partial access** — Once `now >= last_active_at + inactivity_period`
+//!    each beneficiary may claim `partial_access_bps` of their share.
+//! 4. **Proof of death** — The configured verifier attests a proof hash with
+//!    [`verify_death_proof`]. The rest of every share then unlocks. Plans
+//!    without a verifier skip this step and unlock in full at step 3.
+//! 5. **Claim** — Each beneficiary calls [`claim_inheritance`] themselves and
+//!    receives whatever has unlocked for them and not yet been paid. Emits
+//!    `InheritanceClaimed` on every payout. When every share has been paid in
+//!    full the plan is removed.
 //!
-//! # Storage
-//!
-//! Each owner's inheritance plan is stored under
-//! [`DataKey::Inheritance(owner)`] in persistent storage, with a TTL
-//! bumped on every read/write.
+//! All shares are computed against a snapshot of the flexible balance taken
+//! at the first claim, so the order in which beneficiaries claim never
+//! changes how much each one receives.
 
-use soroban_sdk::{Address, Env, Vec};
+use soroban_sdk::{Address, BytesN, Env, Map, Vec};
 
+use crate::admin;
 use crate::error::Error;
-use crate::storage::{extend_instance_ttl, extend_persistent_ttl, transfer_out};
-use crate::types::{DataKey, InheritancePlan};
+use crate::events::{
+    TOPIC_INHERITANCE_CANCELLED, TOPIC_INHERITANCE_CLAIMED, TOPIC_INHERITANCE_PROOF_VERIFIED,
+    TOPIC_INHERITANCE_SETUP,
+};
+use crate::storage::{self, extend_instance_ttl};
+use crate::types::{Beneficiary, DataKey, FlexibleAccount, InheritancePlan};
+
+/// 100% in basis points.
+pub const BPS_DENOMINATOR: u32 = 10_000;
 
 // ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -41,596 +49,360 @@ fn load_plan(env: &Env, owner: &Address) -> Result<InheritancePlan, Error> {
         .persistent()
         .get(&key)
         .ok_or(Error::NotFound)?;
-    extend_persistent_ttl(env, &key);
+    storage::extend_persistent_ttl(env, &key);
     Ok(plan)
 }
 
 fn save_plan(env: &Env, plan: &InheritancePlan) {
     let key = DataKey::Inheritance(plan.owner.clone());
     env.storage().persistent().set(&key, plan);
-    extend_persistent_ttl(env, &key);
+    storage::extend_persistent_ttl(env, &key);
 }
 
-fn require_owner(env: &Env, owner: &Address) {
-    owner.require_auth();
-    let _ = env; // used implicitly by require_auth
+fn any_claimed(plan: &InheritancePlan) -> bool {
+    plan.beneficiaries.iter().any(|b| b.claimed > 0)
 }
 
-/// Validate that a set of beneficiary shares sums to `10_000` bps.
-fn validate_shares_sum(beneficiaries: &Vec<crate::types::Beneficiary>) -> Result<(), Error> {
-    let mut total: u32 = 0;
-    for b in beneficiaries.iter() {
-        total = total.checked_add(b.share_bps).ok_or(Error::Overflow)?;
+/// Share of each beneficiary's entitlement unlocked right now, in bps.
+/// `0` while the owner is still within the inactivity period.
+fn unlocked_bps(env: &Env, plan: &InheritancePlan) -> Result<u32, Error> {
+    let unlocks_at = plan
+        .last_active_at
+        .checked_add(plan.inactivity_period)
+        .ok_or(Error::Overflow)?;
+    if env.ledger().timestamp() < unlocks_at {
+        return Ok(0);
     }
-    if !beneficiaries.is_empty() && total != 10_000 {
-        return Err(Error::InvalidShares);
+    if plan.verifier.is_some() && plan.proof_verified_at.is_none() {
+        return Ok(plan.partial_access_bps);
     }
-    Ok(())
+    Ok(BPS_DENOMINATOR)
+}
+
+/// `balance * share_bps * unlocked_bps / 10_000²`, rounded down.
+fn entitlement(balance: i128, share_bps: u32, unlocked_bps: u32) -> Result<i128, Error> {
+    balance
+        .checked_mul(share_bps as i128)
+        .and_then(|v| v.checked_mul(unlocked_bps as i128))
+        .ok_or(Error::Overflow)?
+        .checked_div((BPS_DENOMINATOR as i128) * (BPS_DENOMINATOR as i128))
+        .ok_or(Error::DivisionByZero)
+}
+
+fn flexible_balance(env: &Env, owner: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get::<DataKey, FlexibleAccount>(&DataKey::Flexible(owner.clone()))
+        .map(|a| a.balance)
+        .unwrap_or(0)
 }
 
 // ── Public entrypoints ─────────────────────────────────────────────────────
 
-/// Add or update a beneficiary for the caller's flexible savings balance.
+/// Create (or replace) the owner's inheritance plan.
 ///
 /// # Arguments
-/// * `owner`      — The savings account owner. Must authorise.
-/// * `beneficiary`— Address that will receive `share_bps` of the balance.
-/// * `share_bps`  — This beneficiary's share in basis points (1–10_000).
-///
-/// # Behaviour
-/// - Creates an [`InheritancePlan`] if one does not already exist.
-/// - If `beneficiary` already appears in the plan, updates their share.
-/// - Otherwise appends them.
-/// - An inactivity timeout of `0` means inheritance is disabled even when
-///   shares sum to 10_000; call [`set_inactivity_timeout`] to activate.
+/// * `beneficiaries`      — heir address → share in bps. Shares must be
+///   non-zero and sum to exactly `10_000`. The owner cannot be an heir.
+/// * `inactivity_period`  — seconds of owner inactivity before any access
+///   unlocks. Must be non-zero.
+/// * `partial_access_bps` — portion of each share claimable after the
+///   inactivity period but before proof of death (`0..=10_000`). Ignored
+///   when no verifier is set.
+/// * `verifier`           — trusted party that attests proof of death.
+///   `None` means time-based unlocking alone releases the full share.
 ///
 /// # Errors
-/// - [`Error::InvalidAmount`] if `share_bps == 0 || share_bps > 10_000`.
-/// - [`Error::Paused`]        if the vault is paused.
-pub fn designate_beneficiary(
+/// - `InvalidParameters` — no beneficiaries, owner listed as an heir,
+///   zero inactivity period, or `partial_access_bps > 10_000`.
+/// - `InvalidShares`     — a zero share, or shares not summing to 10 000.
+/// - `InvalidAddress`    — the owner named as their own verifier.
+/// - `ConflictingState`  — the existing plan already has paid-out claims.
+pub fn setup_inheritance(
     env: &Env,
     owner: Address,
-    beneficiary: Address,
-    share_bps: u32,
+    beneficiaries: Map<Address, u32>,
+    inactivity_period: u64,
+    partial_access_bps: u32,
+    verifier: Option<Address>,
 ) -> Result<(), Error> {
-    crate::admin::ensure_not_paused(env)?;
     extend_instance_ttl(env);
-    require_owner(env, &owner);
+    admin::require_not_paused(env)?;
+    owner.require_auth();
 
-    if share_bps == 0 || share_bps > 10_000 {
-        return Err(Error::InvalidAmount);
+    if beneficiaries.is_empty()
+        || inactivity_period == 0
+        || partial_access_bps > BPS_DENOMINATOR
+    {
+        return Err(Error::InvalidParameters);
+    }
+    if verifier.as_ref() == Some(&owner) {
+        return Err(Error::InvalidAddress);
     }
 
-    // Load or create the plan.
-    let key = DataKey::Inheritance(owner.clone());
-    let mut plan: InheritancePlan = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or_else(|| InheritancePlan {
-            owner: owner.clone(),
-            beneficiaries: Vec::new(env),
-            inactivity_timeout: 0,
-            last_active_at: env.ledger().timestamp(),
-        });
-
-    // Update existing or append new.
-    let mut found = false;
-    let mut updated: Vec<crate::types::Beneficiary> = Vec::new(env);
-    for mut b in plan.beneficiaries.iter() {
-        if b.address == beneficiary {
-            b.share_bps = share_bps;
-            found = true;
+    let mut total: u32 = 0;
+    let mut heirs: Vec<Beneficiary> = Vec::new(env);
+    for (address, share_bps) in beneficiaries.iter() {
+        if address == owner {
+            return Err(Error::InvalidParameters);
         }
-        updated.push_back(b);
-    }
-    if !found {
-        updated.push_back(crate::types::Beneficiary {
-            address: beneficiary.clone(),
+        if share_bps == 0 {
+            return Err(Error::InvalidShares);
+        }
+        total = total.checked_add(share_bps).ok_or(Error::InvalidShares)?;
+        heirs.push_back(Beneficiary {
+            address,
             share_bps,
+            claimed: 0,
         });
     }
-    plan.beneficiaries = updated;
-
-    save_plan(env, &plan);
-
-    env.events().publish(
-        (soroban_sdk::symbol_short!("inherit"), soroban_sdk::symbol_short!("benef_set")),
-        (owner, beneficiary, share_bps),
-    );
-    Ok(())
-}
-
-/// Remove a beneficiary from the caller's inheritance plan.
-///
-/// # Errors
-/// - [`Error::NotFound`] if no plan exists or the beneficiary is not in it.
-/// - [`Error::Paused`]   if the vault is paused.
-pub fn remove_beneficiary(env: &Env, owner: Address, beneficiary: Address) -> Result<(), Error> {
-    crate::admin::ensure_not_paused(env)?;
-    extend_instance_ttl(env);
-    require_owner(env, &owner);
-
-    let mut plan = load_plan(env, &owner)?;
-
-    let mut found = false;
-    let mut updated: Vec<crate::types::Beneficiary> = Vec::new(env);
-    for b in plan.beneficiaries.iter() {
-        if b.address == beneficiary {
-            found = true;
-        } else {
-            updated.push_back(b);
-        }
+    if total != BPS_DENOMINATOR {
+        return Err(Error::InvalidShares);
     }
-    if !found {
-        return Err(Error::NotFound);
-    }
-    plan.beneficiaries = updated;
-    save_plan(env, &plan);
 
-    env.events().publish(
-        (soroban_sdk::symbol_short!("inherit"), soroban_sdk::symbol_short!("benef_rm")),
-        (owner, beneficiary),
-    );
-    Ok(())
-}
-
-/// Set the inactivity timeout for the caller's inheritance plan.
-///
-/// Once `now >= last_active_at + timeout` and the total shares equal
-/// `10_000` bps, beneficiaries may call [`claim_inheritance`].
-///
-/// Setting `timeout = 0` effectively disables automatic inheritance (the
-/// claim check treats it as no timeout configured).
-///
-/// # Errors
-/// - [`Error::NotFound`] if no inheritance plan exists for `owner`.
-/// - [`Error::Paused`]   if the vault is paused.
-pub fn set_inactivity_timeout(env: &Env, owner: Address, timeout_seconds: u64) -> Result<(), Error> {
-    crate::admin::ensure_not_paused(env)?;
-    extend_instance_ttl(env);
-    require_owner(env, &owner);
-
-    let mut plan = load_plan(env, &owner)?;
-    plan.inactivity_timeout = timeout_seconds;
-    save_plan(env, &plan);
-
-    env.events().publish(
-        (soroban_sdk::symbol_short!("inherit"), soroban_sdk::symbol_short!("timeout_set")),
-        (owner, timeout_seconds),
-    );
-    Ok(())
-}
-
-/// Record `now` as `owner`'s last-active timestamp.
-///
-/// Called by `flexible::deposit` and `flexible::withdraw` to keep the
-/// inactivity clock reset while the owner is actively using their account.
-/// Not a public entrypoint — only the flexible module calls this.
-pub(crate) fn touch_owner(env: &Env, owner: &Address) {
     let key = DataKey::Inheritance(owner.clone());
-    if let Some(mut plan) = env.storage().persistent().get::<DataKey, InheritancePlan>(&key) {
-        plan.last_active_at = env.ledger().timestamp();
-        env.storage().persistent().set(&key, &plan);
-        extend_persistent_ttl(env, &key);
-    }
-    // If no plan exists yet, there's nothing to update.
-}
-
-/// Claim the inheritance of `owner`'s flexible balance.
-///
-/// # Conditions for a successful claim
-/// 1. An [`InheritancePlan`] must exist for `owner`.
-/// 2. The plan's `inactivity_timeout > 0`.
-/// 3. The plan's beneficiaries must sum to exactly `10_000` bps.
-/// 4. `now >= last_active_at + inactivity_timeout` (owner is inactive).
-/// 5. The caller must be one of the designated beneficiaries.
-///
-/// When all conditions are met, each beneficiary receives their proportional
-/// share of the flexible balance, the flexible account is zeroed, and the
-/// inheritance plan is removed from storage.
-///
-/// # Errors
-/// - [`Error::NotFound`]         if no plan or flexible account exists.
-/// - [`Error::CooldownActive`]   if the inactivity timeout has not elapsed.
-/// - [`Error::InvalidShares`]    if total shares ≠ 10_000.
-/// - [`Error::Unauthorized`]     if `claimer` is not a beneficiary.
-/// - [`Error::Paused`]           if the vault is paused.
-pub fn claim_inheritance(env: &Env, claimer: Address, owner: Address) -> Result<(), Error> {
-    crate::admin::ensure_not_paused(env)?;
-    extend_instance_ttl(env);
-    claimer.require_auth();
-
-    let plan = load_plan(env, &owner)?;
-
-    // Timeout must be configured.
-    if plan.inactivity_timeout == 0 {
-        return Err(Error::CooldownActive);
-    }
-
-    // Inactivity check.
-    let now = env.ledger().timestamp();
-    let inactive_since = plan
-        .last_active_at
-        .checked_add(plan.inactivity_timeout)
-        .ok_or(Error::Overflow)?;
-    if now < inactive_since {
-        return Err(Error::CooldownActive);
-    }
-
-    // Shares must sum to 10_000.
-    validate_shares_sum(&plan.beneficiaries)?;
-
-    // Claimer must be a beneficiary.
-    let is_beneficiary = plan.beneficiaries.iter().any(|b| b.address == claimer);
-    if !is_beneficiary {
-        return Err(Error::Unauthorized);
-    }
-
-    // Load the flexible account balance.
-    let flex_key = DataKey::Flexible(owner.clone());
-    let mut account = env
-        .storage()
-        .persistent()
-        .get::<DataKey, crate::types::FlexibleAccount>(&flex_key)
-        .ok_or(Error::NotFound)?;
-
-    let total_balance = account.balance;
-    if total_balance <= 0 {
-        return Err(Error::InsufficientBalance);
-    }
-
-    // Pay each beneficiary their share (all-or-nothing).
-    for b in plan.beneficiaries.iter() {
-        // Integer arithmetic: share = balance * bps / 10_000.
-        let share = total_balance
-            .checked_mul(b.share_bps as i128)
-            .ok_or(Error::Overflow)?
-            .checked_div(10_000)
-            .ok_or(Error::DivisionByZero)?;
-        if share > 0 {
-            transfer_out(env, &b.address, share)?;
+    if let Some(existing) = env.storage().persistent().get::<DataKey, InheritancePlan>(&key) {
+        if any_claimed(&existing) {
+            return Err(Error::ConflictingState);
         }
     }
 
-    // Zero the flexible account.
-    account.balance = 0;
-    account.updated_at = now;
-    env.storage().persistent().set(&flex_key, &account);
-    extend_persistent_ttl(env, &flex_key);
+    let now = env.ledger().timestamp();
+    let proof_required = verifier.is_some();
+    let plan = InheritancePlan {
+        owner: owner.clone(),
+        beneficiaries: heirs,
+        inactivity_period,
+        last_active_at: now,
+        partial_access_bps: if proof_required { partial_access_bps } else { BPS_DENOMINATOR },
+        verifier,
+        proof_hash: None,
+        proof_verified_at: None,
+        snapshot_balance: None,
+        created_at: now,
+    };
+    let count = plan.beneficiaries.len();
+    let partial = plan.partial_access_bps;
+    save_plan(env, &plan);
 
-    // Remove the inheritance plan — it has been consumed.
+    env.events().publish(
+        (TOPIC_INHERITANCE_SETUP, owner.clone()),
+        (owner, count, inactivity_period, partial, proof_required, now),
+    );
+    Ok(())
+}
+
+/// Cancel the owner's inheritance plan.
+///
+/// Errors: `NotFound` if there is no plan.
+pub fn cancel_inheritance(env: &Env, owner: Address) -> Result<(), Error> {
+    extend_instance_ttl(env);
+    admin::require_not_paused(env)?;
+    owner.require_auth();
+
+    load_plan(env, &owner)?;
     env.storage()
         .persistent()
         .remove(&DataKey::Inheritance(owner.clone()));
 
     env.events().publish(
-        (soroban_sdk::symbol_short!("inherit"), soroban_sdk::symbol_short!("claimed")),
-        (claimer, owner, total_balance, now),
+        (TOPIC_INHERITANCE_CANCELLED, owner.clone()),
+        (owner, env.ledger().timestamp()),
     );
     Ok(())
 }
 
-/// Read the inheritance plan for `owner`, or `Error::NotFound`.
-pub fn get_plan(env: &Env, owner: Address) -> Result<InheritancePlan, Error> {
-    load_plan(env, &owner)
+/// Explicit proof of life: resets the owner's inactivity clock without
+/// moving funds.
+///
+/// Errors: `NotFound` if there is no plan.
+pub fn check_in(env: &Env, owner: Address) -> Result<(), Error> {
+    extend_instance_ttl(env);
+    owner.require_auth();
+    load_plan(env, &owner)?;
+    touch_owner(env, &owner);
+    Ok(())
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
+/// Record owner activity. Called from flexible deposits and withdrawals.
+///
+/// Resets the inactivity clock and voids any attested proof of death (the
+/// owner has just proven they are alive). The balance snapshot is dropped
+/// too unless claims were already paid against it.
+pub(crate) fn touch_owner(env: &Env, owner: &Address) {
+    let key = DataKey::Inheritance(owner.clone());
+    if let Some(mut plan) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, InheritancePlan>(&key)
+    {
+        plan.last_active_at = env.ledger().timestamp();
+        plan.proof_hash = None;
+        plan.proof_verified_at = None;
+        if !any_claimed(&plan) {
+            plan.snapshot_balance = None;
+        }
+        save_plan(env, &plan);
+    }
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger};
-    use soroban_sdk::{token, Env};
+/// Attest the owner's proof of death. Only the plan's verifier may call
+/// this, and only after the inactivity period has elapsed.
+///
+/// Errors: `NotFound` (no plan), `Unauthorized` (no verifier configured or
+/// caller is not it), `StillLocked` (owner still within the inactivity
+/// period), `ConflictingState` (proof already attested).
+pub fn verify_death_proof(
+    env: &Env,
+    verifier: Address,
+    owner: Address,
+    proof_hash: BytesN<32>,
+) -> Result<(), Error> {
+    extend_instance_ttl(env);
+    admin::require_not_paused(env)?;
+    verifier.require_auth();
 
-    use crate::test::{register_vault, setup_flexible_account};
-
-    // ── helpers ─────────────────────────────────────────────────────────────
-
-    fn advance(env: &Env, seconds: u64) {
-        env.ledger().with_mut(|l| l.timestamp += seconds);
+    let mut plan = load_plan(env, &owner)?;
+    if plan.verifier.as_ref() != Some(&verifier) {
+        return Err(Error::Unauthorized);
+    }
+    if plan.proof_verified_at.is_some() {
+        return Err(Error::ConflictingState);
+    }
+    if unlocked_bps(env, &plan)? == 0 {
+        return Err(Error::StillLocked);
     }
 
-    // ── beneficiary designation ──────────────────────────────────────────────
+    let now = env.ledger().timestamp();
+    plan.proof_hash = Some(proof_hash.clone());
+    plan.proof_verified_at = Some(now);
+    save_plan(env, &plan);
 
-    #[test]
-    fn designate_single_beneficiary() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (vault, _token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
+    env.events().publish(
+        (TOPIC_INHERITANCE_PROOF_VERIFIED, owner.clone()),
+        (owner, verifier, proof_hash, now),
+    );
+    Ok(())
+}
 
-        vault
-            .designate_beneficiary(&owner, &heir, &10_000u32)
-            .unwrap();
+/// Pay `beneficiary` everything that has unlocked for them and not yet been
+/// claimed. Returns the amount paid.
+///
+/// Errors: `NotFound` (no plan / no flexible account), `Unauthorized`
+/// (caller is not a beneficiary), `StillLocked` (inactivity period not yet
+/// elapsed, or nothing unlocked before proof), `InsufficientBalance`
+/// (nothing left to claim).
+pub fn claim_inheritance(env: &Env, beneficiary: Address, owner: Address) -> Result<i128, Error> {
+    extend_instance_ttl(env);
+    admin::require_not_paused(env)?;
+    beneficiary.require_auth();
 
-        let plan = vault.get_inheritance_plan(&owner).unwrap();
-        assert_eq!(plan.beneficiaries.len(), 1);
-        assert_eq!(plan.beneficiaries.get(0).unwrap().address, heir);
-        assert_eq!(plan.beneficiaries.get(0).unwrap().share_bps, 10_000);
+    let mut plan = load_plan(env, &owner)?;
+    let index = plan
+        .beneficiaries
+        .iter()
+        .position(|b| b.address == beneficiary)
+        .ok_or(Error::Unauthorized)? as u32;
+
+    let unlocked = unlocked_bps(env, &plan)?;
+    if unlocked == 0 {
+        return Err(Error::StillLocked);
     }
 
-    #[test]
-    fn designate_two_beneficiaries_split() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (vault, _token, owner) = register_vault(&env);
-        let heir1 = Address::generate(&env);
-        let heir2 = Address::generate(&env);
+    let flex_key = DataKey::Flexible(owner.clone());
+    let mut account: FlexibleAccount = env
+        .storage()
+        .persistent()
+        .get(&flex_key)
+        .ok_or(Error::NotFound)?;
 
-        vault
-            .designate_beneficiary(&owner, &heir1, &6_000u32)
-            .unwrap();
-        vault
-            .designate_beneficiary(&owner, &heir2, &4_000u32)
-            .unwrap();
+    let snapshot = match plan.snapshot_balance {
+        Some(balance) => balance,
+        None => {
+            if account.balance <= 0 {
+                return Err(Error::InsufficientBalance);
+            }
+            plan.snapshot_balance = Some(account.balance);
+            account.balance
+        }
+    };
 
-        let plan = vault.get_inheritance_plan(&owner).unwrap();
-        assert_eq!(plan.beneficiaries.len(), 2);
+    let mut heir = plan.beneficiaries.get(index).ok_or(Error::NotFound)?;
+    let due = entitlement(snapshot, heir.share_bps, unlocked)?
+        .checked_sub(heir.claimed)
+        .ok_or(Error::Overflow)?;
+    let amount = if due > account.balance { account.balance } else { due };
+    if amount <= 0 {
+        return Err(Error::InsufficientBalance);
     }
 
-    #[test]
-    fn update_existing_beneficiary_share() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (vault, _token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
+    storage::transfer_out(env, &beneficiary, amount)?;
 
-        vault
-            .designate_beneficiary(&owner, &heir, &5_000u32)
-            .unwrap();
-        // Update the share.
-        vault
-            .designate_beneficiary(&owner, &heir, &10_000u32)
-            .unwrap();
+    let now = env.ledger().timestamp();
+    account.balance = account.balance.checked_sub(amount).ok_or(Error::Overflow)?;
+    account.updated_at = now;
+    env.storage().persistent().set(&flex_key, &account);
+    storage::extend_persistent_ttl(env, &flex_key);
 
-        let plan = vault.get_inheritance_plan(&owner).unwrap();
-        assert_eq!(plan.beneficiaries.len(), 1);
-        assert_eq!(plan.beneficiaries.get(0).unwrap().share_bps, 10_000);
+    heir.claimed = heir.claimed.checked_add(amount).ok_or(Error::Overflow)?;
+    let total_claimed = heir.claimed;
+    plan.beneficiaries.set(index, heir);
+
+    // The plan is complete once every share has been paid in full.
+    let mut complete = unlocked == BPS_DENOMINATOR;
+    if complete {
+        for b in plan.beneficiaries.iter() {
+            if b.claimed < entitlement(snapshot, b.share_bps, BPS_DENOMINATOR)? {
+                complete = false;
+                break;
+            }
+        }
+    }
+    if complete {
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Inheritance(owner.clone()));
+    } else {
+        save_plan(env, &plan);
     }
 
-    #[test]
-    fn designate_rejects_zero_share() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (vault, _token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
+    env.events().publish(
+        (TOPIC_INHERITANCE_CLAIMED, owner.clone(), beneficiary.clone()),
+        (owner, beneficiary, amount, total_claimed, unlocked, now),
+    );
+    Ok(amount)
+}
 
-        assert_eq!(
-            vault.try_designate_beneficiary(&owner, &heir, &0u32),
-            Err(Ok(Error::InvalidAmount))
-        );
+/// The owner's inheritance plan, if any.
+pub fn get_plan(env: &Env, owner: Address) -> Option<InheritancePlan> {
+    let key = DataKey::Inheritance(owner);
+    let plan = env.storage().persistent().get(&key);
+    if plan.is_some() {
+        storage::extend_persistent_ttl(env, &key);
     }
+    plan
+}
 
-    #[test]
-    fn designate_rejects_share_above_10000() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (vault, _token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
-
-        assert_eq!(
-            vault.try_designate_beneficiary(&owner, &heir, &10_001u32),
-            Err(Ok(Error::InvalidAmount))
-        );
-    }
-
-    // ── inactivity timeout ───────────────────────────────────────────────────
-
-    #[test]
-    fn set_inactivity_timeout_stores_value() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let (vault, _token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
-
-        vault
-            .designate_beneficiary(&owner, &heir, &10_000u32)
-            .unwrap();
-        vault
-            .set_inactivity_timeout(&owner, &(30 * 24 * 3600u64))
-            .unwrap();
-
-        let plan = vault.get_inheritance_plan(&owner).unwrap();
-        assert_eq!(plan.inactivity_timeout, 30 * 24 * 3600);
-    }
-
-    // ── claim process ────────────────────────────────────────────────────────
-
-    #[test]
-    fn claim_inheritance_succeeds_after_timeout() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
-
-        let (vault, token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
-        let timeout = 90 * 24 * 3600u64; // 90 days
-
-        // Owner deposits.
-        setup_flexible_account(&env, &vault, &token, &owner, 1_000_000);
-
-        // Designate heir and configure timeout.
-        vault
-            .designate_beneficiary(&owner, &heir, &10_000u32)
-            .unwrap();
-        vault.set_inactivity_timeout(&owner, &timeout).unwrap();
-
-        // Advance past the timeout.
-        advance(&env, timeout + 1);
-
-        let heir_balance_before =
-            token::Client::new(&env, &token).balance(&heir);
-
-        vault.claim_inheritance(&heir, &owner).unwrap();
-
-        let heir_balance_after =
-            token::Client::new(&env, &token).balance(&heir);
-        assert!(heir_balance_after > heir_balance_before);
-    }
-
-    #[test]
-    fn claim_rejected_before_timeout_elapsed() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
-
-        let (vault, token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
-        let timeout = 90 * 24 * 3600u64;
-
-        setup_flexible_account(&env, &vault, &token, &owner, 1_000_000);
-        vault
-            .designate_beneficiary(&owner, &heir, &10_000u32)
-            .unwrap();
-        vault.set_inactivity_timeout(&owner, &timeout).unwrap();
-
-        // Only half the timeout has passed — should be rejected.
-        advance(&env, timeout / 2);
-
-        assert_eq!(
-            vault.try_claim_inheritance(&heir, &owner),
-            Err(Ok(Error::CooldownActive))
-        );
-    }
-
-    #[test]
-    fn claim_rejected_for_non_beneficiary() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
-
-        let (vault, token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
-        let stranger = Address::generate(&env);
-        let timeout = 1u64;
-
-        setup_flexible_account(&env, &vault, &token, &owner, 1_000_000);
-        vault
-            .designate_beneficiary(&owner, &heir, &10_000u32)
-            .unwrap();
-        vault.set_inactivity_timeout(&owner, &timeout).unwrap();
-        advance(&env, timeout + 1);
-
-        assert_eq!(
-            vault.try_claim_inheritance(&stranger, &owner),
-            Err(Ok(Error::Unauthorized))
-        );
-    }
-
-    #[test]
-    fn claim_rejected_when_shares_dont_sum_to_10000() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
-
-        let (vault, token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
-        let timeout = 1u64;
-
-        setup_flexible_account(&env, &vault, &token, &owner, 1_000_000);
-        // Only 5 000 bps — not 10 000.
-        vault
-            .designate_beneficiary(&owner, &heir, &5_000u32)
-            .unwrap();
-        vault.set_inactivity_timeout(&owner, &timeout).unwrap();
-        advance(&env, timeout + 1);
-
-        assert_eq!(
-            vault.try_claim_inheritance(&heir, &owner),
-            Err(Ok(Error::InvalidShares))
-        );
-    }
-
-    #[test]
-    fn claim_rejected_when_timeout_is_zero() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
-
-        let (vault, token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
-
-        setup_flexible_account(&env, &vault, &token, &owner, 1_000_000);
-        vault
-            .designate_beneficiary(&owner, &heir, &10_000u32)
-            .unwrap();
-        // Timeout stays 0 — inheritance disabled.
-
-        advance(&env, 999_999_999);
-
-        assert_eq!(
-            vault.try_claim_inheritance(&heir, &owner),
-            Err(Ok(Error::CooldownActive))
-        );
-    }
-
-    #[test]
-    fn deposit_activity_resets_inactivity_clock() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
-
-        let (vault, token, owner) = register_vault(&env);
-        let heir = Address::generate(&env);
-        let timeout = 100u64;
-
-        setup_flexible_account(&env, &vault, &token, &owner, 1_000_000);
-        vault
-            .designate_beneficiary(&owner, &heir, &10_000u32)
-            .unwrap();
-        vault.set_inactivity_timeout(&owner, &timeout).unwrap();
-
-        // Advance 90 seconds — still within timeout.
-        advance(&env, 90);
-
-        // Owner deposits (resets clock to now = 1_000_090).
-        vault.deposit(&owner, &100i128).unwrap();
-
-        // Advance another 90 seconds — only 90s since last activity.
-        advance(&env, 90);
-
-        // Should still be rejected because clock was reset.
-        assert_eq!(
-            vault.try_claim_inheritance(&heir, &owner),
-            Err(Ok(Error::CooldownActive))
-        );
-    }
-
-    #[test]
-    fn multi_beneficiary_split_pays_proportional_amounts() {
-        let env = Env::default();
-        env.mock_all_auths();
-        env.ledger().with_mut(|l| l.timestamp = 1_000_000);
-
-        let (vault, token, owner) = register_vault(&env);
-        let heir1 = Address::generate(&env);
-        let heir2 = Address::generate(&env);
-        let timeout = 1u64;
-
-        let deposit_amount = 1_000_000i128;
-        setup_flexible_account(&env, &vault, &token, &owner, deposit_amount);
-
-        // 60% / 40% split.
-        vault
-            .designate_beneficiary(&owner, &heir1, &6_000u32)
-            .unwrap();
-        vault
-            .designate_beneficiary(&owner, &heir2, &4_000u32)
-            .unwrap();
-        vault.set_inactivity_timeout(&owner, &timeout).unwrap();
-        advance(&env, timeout + 1);
-
-        let tok = token::Client::new(&env, &token);
-        let before1 = tok.balance(&heir1);
-        let before2 = tok.balance(&heir2);
-
-        vault.claim_inheritance(&heir1, &owner).unwrap();
-
-        let got1 = tok.balance(&heir1) - before1;
-        let got2 = tok.balance(&heir2) - before2;
-        assert_eq!(got1, 600_000);
-        assert_eq!(got2, 400_000);
-    }
+/// How much `beneficiary` could claim from `owner`'s plan right now.
+/// `0` when there is no plan, the caller is not an heir, or nothing has
+/// unlocked.
+pub fn claimable(env: &Env, owner: Address, beneficiary: Address) -> i128 {
+    let plan = match get_plan(env, owner.clone()) {
+        Some(plan) => plan,
+        None => return 0,
+    };
+    let heir = match plan.beneficiaries.iter().find(|b| b.address == beneficiary) {
+        Some(heir) => heir,
+        None => return 0,
+    };
+    let unlocked = match unlocked_bps(env, &plan) {
+        Ok(bps) => bps,
+        Err(_) => return 0,
+    };
+    let balance = flexible_balance(env, &owner);
+    let snapshot = plan.snapshot_balance.unwrap_or(balance);
+    let due = entitlement(snapshot, heir.share_bps, unlocked)
+        .unwrap_or(0)
+        .saturating_sub(heir.claimed);
+    due.min(balance).max(0)
 }

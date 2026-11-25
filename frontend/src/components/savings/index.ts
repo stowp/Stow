@@ -76,3 +76,7 @@ export type {
   SavingsListEmptyStateProps,
 } from "../ui/EmptyState";
 
+export { default as ContributorList } from "./ContributorList";
+export type { ContributorListProps } from "./ContributorList";
+export { default as HabitTracker } from "./HabitTracker";
+export type { HabitTrackerProps } from "./HabitTracker";

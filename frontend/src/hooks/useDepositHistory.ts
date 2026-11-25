@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
+import { cacheKeys, withOfflineCache } from "@/lib/offline";
 
 export interface DepositHistoryEntry {
   /** ISO-8601 timestamp of when the deposit was recorded. */
@@ -38,26 +39,30 @@ export function useDepositHistory(
     setError(null);
 
     try {
-      const response = await apiFetch(
-        `/api/savings/deposits?address=${encodeURIComponent(address)}`,
+      // Cached for offline viewing; served from the cache when offline.
+      const { data } = await withOfflineCache(
+        cacheKeys.deposits(address),
+        async (): Promise<DepositHistoryEntry[]> => {
+          const response = await apiFetch(
+            `/api/savings/deposits?address=${encodeURIComponent(address)}`,
+          );
+
+          if (response.status === 404) return [];
+
+          if (!response.ok) {
+            throw new ApiError(
+              `Failed to load deposit history: ${response.statusText}`,
+              response.status,
+            );
+          }
+
+          const body:
+            | { deposits?: DepositHistoryEntry[] }
+            | DepositHistoryEntry[] = await response.json();
+          return Array.isArray(body) ? body : (body.deposits ?? []);
+        },
       );
-
-      if (response.status === 404) {
-        setDeposits([]);
-        setStatus("ready");
-        return;
-      }
-
-      if (!response.ok) {
-        throw new ApiError(
-          `Failed to load deposit history: ${response.statusText}`,
-          response.status,
-        );
-      }
-
-      const data: { deposits?: DepositHistoryEntry[] } | DepositHistoryEntry[] =
-        await response.json();
-      setDeposits(Array.isArray(data) ? data : (data.deposits ?? []));
+      setDeposits(data);
       setStatus("ready");
     } catch (err) {
       setError(

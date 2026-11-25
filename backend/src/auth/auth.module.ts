@@ -18,11 +18,17 @@ import { WebAuthnCredential } from './entities/webauthn-credential.entity';
 import { OAuthIdentity } from './entities/oauth-identity.entity';
 import { OAuthTransaction } from './entities/oauth-transaction.entity';
 import { OAuthService } from './oauth.service';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { TwoFactorAuth } from './entities/two-factor-auth.entity';
+import { TwoFactorRecovery } from './entities/two-factor-recovery.entity';
+import { TwoFactorService } from './two-factor/two-factor.service';
+import { TwoFactorController } from './two-factor/two-factor.controller';
 
 @Module({
   imports: [
     PassportModule,
     ConfigModule,
+    NotificationsModule,
     TypeOrmModule.forFeature([
       User,
       ApiKey,
@@ -32,6 +38,8 @@ import { OAuthService } from './oauth.service';
       WebAuthnCredential,
       OAuthIdentity,
       OAuthTransaction,
+      TwoFactorAuth,
+      TwoFactorRecovery,
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -44,14 +52,21 @@ import { OAuthService } from './oauth.service';
       }),
     }),
   ],
-  controllers: [AuthController, ApiKeyController],
+  controllers: [AuthController, ApiKeyController, TwoFactorController],
   providers: [
     AuthService,
     ApiKeyService,
     JwtStrategy,
     RateLimitService,
     OAuthService,
+    TwoFactorService,
   ],
-  exports: [AuthService, ApiKeyService, JwtModule, OAuthService],
+  exports: [
+    AuthService,
+    ApiKeyService,
+    JwtModule,
+    OAuthService,
+    TwoFactorService,
+  ],
 })
 export class AuthModule {}

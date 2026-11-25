@@ -24,6 +24,7 @@ import { ContractModule } from './contract/contract.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { AccountModule } from './account/account.module';
 import { SavingsModule } from './savings/savings.module';
+import { AccountMergeModule } from './savings/account-merge/account-merge.module';
 import { AuditModule } from './audit/audit.module';
 import { ActivityModule } from './activity/activity.module';
 import { NftRewardsModule } from './nft-rewards/nft-rewards.module';
@@ -37,6 +38,11 @@ import { GraphqlApiModule } from './graphql/graphql.module';
 import { CacheModule } from './cache/cache.module';
 import { MetricsModule } from './metrics/metrics.module';
 import { FeesModule } from './fees/fees.module';
+import { TaxModule } from './tax/tax.module';
+import { MlModule } from './ml/ml.module';
+import { TransactionDisputeModule } from './transaction-dispute/transaction-dispute.module';
+import { SavingsStreakModule } from './savings-streak/savings-streak.module';
+import { ReferralModule } from './referral/referral.module';
 
 @Module({
   imports: [
@@ -72,6 +78,15 @@ import { FeesModule } from './fees/fees.module';
             ttl: configService.get<number>('RATE_LIMIT_WRITE_TTL_MS') ?? 60_000,
             limit: configService.get<number>('RATE_LIMIT_WRITE_LIMIT') ?? 30,
           },
+          {
+            name: 'partner',
+            ttl:
+              configService.get<number>('PARTNER_ROUNDUP_THROTTLE_TTL_MS') ??
+              60_000,
+            limit:
+              configService.get<number>('PARTNER_ROUNDUP_THROTTLE_LIMIT') ??
+              60,
+          },
         ],
         setHeaders: true,
       }),
@@ -105,6 +120,8 @@ import { FeesModule } from './fees/fees.module';
     CacheModule,
     MetricsModule,
     FeesModule,
+    TaxModule,
+    MlModule,
     HealthModule,
     AuthModule,
     UsersModule,
@@ -117,6 +134,7 @@ import { FeesModule } from './fees/fees.module';
     WebhooksModule,
     AccountModule,
     SavingsModule,
+    AccountMergeModule,
     ActivityModule,
     AuditModule,
     BackupModule,
@@ -130,6 +148,9 @@ import { FeesModule } from './fees/fees.module';
         secret: configService.get<string>('JWT_SECRET'),
       }),
     }),
+    ReferralModule,
+    TransactionDisputeModule,
+    SavingsStreakModule,
   ],
 
   controllers: [AppController],
