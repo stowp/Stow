@@ -596,3 +596,172 @@ fn multiple_deposits_in_same_period_count_as_one_for_consistency() {
     assert_eq!(c.balance(&c.client.address), 0);
     assert_eq!(c.client.get_challenge(&id).winners, 1);
 }
+
+#[test]
+fn challenge_with_exact_min_and_max_participants() {
+    let c = setup();
+    let mut config = c.config(ChallengeKind::TotalSaved, 1_000);
+    config.min_participants = 2;
+    config.max_participants = 2;
+    let id = c.create(&config);
+    
+    // Add exactly 2 participants (min and max)
+    let p1 = c.joined(id, 10_000);
+    let p2 = c.joined(id, 10_000);
+    
+    // Verify challenge is now full
+    assert_eq!(c.client.get_challenge(&id).participant_count, 2);
+    let p3 = c.funded(STAKE);
+    assert_eq!(c.client.try_join(&p3, &id), Err(Ok(Error::ChallengeFull)));
+    
+    // Both participants meet target
+    c.client.deposit(&p1, &id, &1_000);
+    c.client.deposit(&p2, &id, &1_000);
+    
+    c.end(id);
+    
+    // Both are winners, no prize pool (everyone won)
+    assert_eq!(c.client.settle(&id, &p1), STAKE + 1_000);
+    assert_eq!(c.client.settle(&id, &p2), STAKE + 1_000);
+    assert_eq!(c.client.get_challenge(&id).winners, 2);
+    assert_eq!(c.client.get_challenge(&id).prize_pool, 0);
+}
+
+#[test]
+fn settle_all_participants_in_different_order() {
+    let c = setup();
+    let id = c.create(&c.config(ChallengeKind::TotalSaved, 1_000));
+    
+    let p1 = c.joined(id, 10_000);
+    let p2 = c.joined(id, 10_000);
+    let p3 = c.joined(id, 10_000);
+    let p4 = c.joined(id, 10_000);
+    
+    // Only p2 and p4 meet the target
+    c.client.deposit(&p2, &id, &1_000);
+    c.client.deposit(&p4, &id, &1_200);
+    c.client.deposit(&p1, &id, &500);
+    c.client.deposit(&p3, &id, &300);
+    
+    c.end(id);
+    
+    // Settle in non-sequential order: p3, p1, p4, p2
+    // 2 losers, each penalized 200, total pool = 400
+    let p3_payout = c.client.settle(&id, &p3);
+    assert_eq!(p3_payout, STAKE - 200 + 300);
+    assert_eq!(c.client.get_challenge(&id).prize_pool, 200);
+    
+    let p1_payout = c.client.settle(&id, &p1);
+    assert_eq!(p1_payout, STAKE - 200 + 500);
+    assert_eq!(c.client.get_challenge(&id).prize_pool, 400);
+    
+    // Winners split the pool: 200 each
+    let p4_payout = c.client.settle(&id, &p4);
+    assert_eq!(p4_payout, STAKE + 1_200 + 200);
+    
+    let p2_payout = c.client.settle(&id, &p2);
+    assert_eq!(p2_payout, STAKE + 1_000 + 200);
+    
+    assert_eq!(c.balance(&c.client.address), 0);
+    assert_eq!(c.client.get_challenge(&id).status, ChallengeStatus::Closed);
+}
+
+#[test]
+fn growth_rate_with_minimal_growth_just_below_target() {
+    let c = setup();
+    // Target 5000 bps = 50% growth
+    let id = c.create(&c.config(ChallengeKind::GrowthRate, 5_000));
+    
+    let barely_missing = c.joined(id, 10_000);
+    let winner = c.joined(id, 10_000);
+    
+    // barely_missing: first deposit 1000, total 1499 = 49.9% growth (just below 50%)
+    c.client.deposit(&barely_missing, &id, &1_000);
+    c.client.deposit(&barely_missing, &id, &499);
+    assert!(!c.client.is_on_track(&id, &barely_missing));
+    
+    // winner: first deposit 1000, total 1500 = 50% growth (exactly meets target)
+    c.client.deposit(&winner, &id, &1_000);
+    c.client.deposit(&winner, &id, &500);
+    assert!(c.client.is_on_track(&id, &winner));
+    
+    c.end(id);
+    
+    // barely_missing loses penalty
+    let loser_payout = c.client.settle(&id, &barely_missing);
+    assert_eq!(loser_payout, STAKE - 200 + 1_499);
+    
+    let winner_payout = c.client.settle(&id, &winner);
+    assert_eq!(winner_payout, STAKE + 1_500 + 200);
+    
+    assert_eq!(c.client.get_challenge(&id).winners, 1);
+}
+
+#[test]
+fn consistency_challenge_with_deposits_at_period_boundaries() {
+    let c = setup();
+    let id = c.create(&c.config(ChallengeKind::Consistency, 3));
+    let alice = c.joined(id, 10_000);
+    
+    // Deposit at the very start of period 0
+    c.client.deposit(&alice, &id, &100);
+    assert_eq!(c.client.get_participant(&id, &alice).active_periods, 1);
+    
+    // Advance to 1 second before next period
+    c.advance(DAY - 1);
+    c.client.deposit(&alice, &id, &100);
+    // Still in period 0
+    assert_eq!(c.client.get_participant(&id, &alice).active_periods, 1);
+    
+    // Cross into period 1
+    c.advance(1);
+    c.client.deposit(&alice, &id, &100);
+    assert_eq!(c.client.get_participant(&id, &alice).active_periods, 2);
+    
+    // Jump to period 2
+    c.advance(DAY);
+    c.client.deposit(&alice, &id, &100);
+    assert_eq!(c.client.get_participant(&id, &alice).active_periods, 3);
+    
+    assert!(c.client.is_on_track(&id, &alice));
+    
+    c.end(id);
+    let payout = c.client.settle(&id, &alice);
+    assert_eq!(payout, STAKE + 400);
+    assert_eq!(c.client.get_challenge(&id).winners, 1);
+}
+
+#[test]
+fn challenge_cannot_be_settled_twice_by_same_participant() {
+    let c = setup();
+    let id = c.create(&c.config(ChallengeKind::TotalSaved, 1_000));
+    
+    let winner = c.joined(id, 10_000);
+    let loser = c.joined(id, 10_000);
+    
+    c.client.deposit(&winner, &id, &1_000);
+    c.end(id);
+    
+    // First settlement succeeds
+    let first_payout = c.client.settle(&id, &winner);
+    assert!(first_payout > 0);
+    assert!(c.client.get_participant(&id, &winner).settled);
+    
+    // Second settlement attempt fails
+    assert_eq!(
+        c.client.try_settle(&id, &winner),
+        Err(Ok(Error::AlreadySettled))
+    );
+    
+    // Loser can still settle
+    let loser_payout = c.client.settle(&id, &loser);
+    assert!(loser_payout > 0);
+    
+    // Loser also cannot settle twice
+    assert_eq!(
+        c.client.try_settle(&id, &loser),
+        Err(Ok(Error::AlreadySettled))
+    );
+    
+    assert_eq!(c.balance(&c.client.address), 0);
+}
